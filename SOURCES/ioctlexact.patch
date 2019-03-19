@@ -1,0 +1,91 @@
+Add a function to decode ioctl based on full iop
+
+From: Frediano Ziglio <frediano.ziglio@citrix.com>
+
+Standard sys_ioctl use only type and number but to distinguish Xen ioctl
+the full iop (with size and direction) is better.
+
+Signed-off-by: Frediano Ziglio <frediano.ziglio@citrix.com>
+
+diff --git a/Makefile.am b/Makefile.am
+index a30ac1c..6fc3ad0 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -27,6 +27,7 @@ strace_SOURCES =	\
+ 	inotify.c	\
+ 	io.c		\
+ 	ioctl.c		\
++	ioctlexact.c    \
+ 	ioprio.c	\
+ 	ipc.c		\
+ 	kexec.c		\
+diff --git a/io.c b/io.c
+index 6b3f4b7..8569e6f 100644
+--- a/io.c
++++ b/io.c
+@@ -376,6 +376,8 @@ sys_vmsplice(struct tcb *tcp)
+ 	return 0;
+ }
+ 
++extern int ioctl_decode_exact(struct tcb *tcp);
++
+ int
+ sys_ioctl(struct tcb *tcp)
+ {
+@@ -384,6 +386,12 @@ sys_ioctl(struct tcb *tcp)
+ 	if (entering(tcp)) {
+ 		printfd(tcp, tcp->u_arg[0]);
+ 		tprints(", ");
++	}
++
++	if (ioctl_decode_exact(tcp))
++		return 0;
++
++	if (entering(tcp)) {
+ 		iop = ioctl_lookup(tcp->u_arg[1]);
+ 		if (iop) {
+ 			tprints(iop->symbol);
+diff --git a/ioctlexact.c b/ioctlexact.c
+new file mode 100644
+index 0000000..9a9ca7d
+--- /dev/null
++++ b/ioctlexact.c
+@@ -0,0 +1,38 @@
++/*
++ * Copyright (c) 2014 Citrix.
++ * Written by Frediano Ziglio <frediano.ziglio@citrix.com>.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 3. The name of the author may not be used to endorse or promote products
++ *    derived from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++#include "defs.h"
++
++/*
++ * Try to detect and handle the exact ioctl code
++ * return 1 if handled, 0 otherwise
++ */
++int ioctl_decode_exact(struct tcb *tcp)
++{
++	return 0;
++}
++

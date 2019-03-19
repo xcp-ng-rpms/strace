@@ -1,0 +1,14 @@
+diff --git a/ioctlexact.c b/ioctlexact.c
+index a8bc0cd..a446d3b 100644
+--- a/ioctlexact.c
++++ b/ioctlexact.c
+@@ -127,7 +127,9 @@ print_xen_domctl_bind_pt_irq(print_status *status, const void *_data, const void
+ 
+ 	status_printf(status, "{machine_irq=%u,", data->machine_irq);
+ 	status_printf(status, "irq_type=%u,", data->irq_type);
++#if XEN_DOMCTL_INTERFACE_VERSION < 0x0000000e
+ 	status_printf(status, "hvm_domid=%u,", data->hvm_domid);
++#endif
+ 	switch (data->irq_type) {
+ 	case PT_IRQ_TYPE_PCI:
+ 		status_printf(status, "{pci=%u,%u,%u}", data->u.pci.bus, data->u.pci.device, data->u.pci.intx);

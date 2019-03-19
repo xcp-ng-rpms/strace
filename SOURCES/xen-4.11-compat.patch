@@ -1,0 +1,100 @@
+diff --git a/ioctlexact.c b/ioctlexact.c
+index a446d3b..4f9d682 100644
+--- a/ioctlexact.c
++++ b/ioctlexact.c
+@@ -172,7 +172,6 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL_NOARG(pausedomain)
+ 	XEN_DOMCTL_NOARG(unpausedomain)
+ 	XEN_DOMCTL_OUT(getdomaininfo, xen_domctl_getdomaininfo, getdomaininfo)	// output
+-	XEN_DOMCTL_OUT(getmemlist, xen_domctl_getmemlist, getmemlist)		// output, max_pfns input
+ #ifdef XEN_DOMCTL_getpageframeinfo
+ 	XEN_DOMCTL_OUT(getpageframeinfo, xen_domctl_getpageframeinfo, getpageframeinfo)	// output, gmfn in
+ #endif
+@@ -185,7 +184,9 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL(setvcpucontext, xen_domctl_vcpucontext, vcpucontext)	// input
+ 	XEN_DOMCTL_OUT(getvcpucontext, xen_domctl_vcpucontext, vcpucontext)	// vcpu in output
+ 	XEN_DOMCTL_OUT(getvcpuinfo, xen_domctl_getvcpuinfo, getvcpuinfo)	// vcpu in, output
++#ifdef XEN_DOMCTL_max_vcpus
+ 	XEN_DOMCTL(max_vcpus, xen_domctl_max_vcpus, max_vcpus)		// input
++#endif
+ //	XEN_DOMCTL(scheduler_op, xen_domctl_scheduler_op, scheduler_op)	// depends ??
+ 	XEN_DOMCTL(setdomainhandle, xen_domctl_setdomainhandle, setdomainhandle)	// input
+ 	XEN_DOMCTL(setdebugging, xen_domctl_setdebugging, setdebugging)	// input
+@@ -208,7 +209,9 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL(bind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input ??
+ 	XEN_DOMCTL(memory_mapping, xen_domctl_memory_mapping, memory_mapping)	// input
+ 	XEN_DOMCTL(ioport_mapping, xen_domctl_ioport_mapping, ioport_mapping)	// input
++#ifdef XEN_DOMCTL_pin_mem_cacheattr
+ 	XEN_DOMCTL(pin_mem_cacheattr, xen_domctl_pin_mem_cacheattr, pin_mem_cacheattr)	// input
++#endif
+ 	XEN_DOMCTL(set_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// input
+ 	XEN_DOMCTL_OUT(get_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// output, vcpu input
+ //	XEN_DOMCTL(set_opt_feature, xen_domctl_set_opt_feature, set_opt_feature)	// only ia64
+@@ -289,7 +292,6 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL_NOARG(pausedomain)
+ 	XEN_DOMCTL_NOARG(unpausedomain)
+ 	XEN_DOMCTL_OUT(getdomaininfo, xen_domctl_getdomaininfo, getdomaininfo)	// output
+-	XEN_DOMCTL_OUT(getmemlist, xen_domctl_getmemlist, getmemlist)		// output, max_pfns input
+ #ifdef XEN_DOMCTL_getpageframeinfo
+ 	XEN_DOMCTL_OUT(getpageframeinfo, xen_domctl_getpageframeinfo, getpageframeinfo)	// output, gmfn in
+ #endif
+@@ -325,7 +327,9 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL(bind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input ??
+ 	XEN_DOMCTL(memory_mapping, xen_domctl_memory_mapping, memory_mapping)	// input
+ 	XEN_DOMCTL(ioport_mapping, xen_domctl_ioport_mapping, ioport_mapping)	// input
++#ifdef XEN_DOMCTL_pin_mem_cacheattr
+ 	XEN_DOMCTL(pin_mem_cacheattr, xen_domctl_pin_mem_cacheattr, pin_mem_cacheattr)	// input
++#endif
+ 	XEN_DOMCTL(set_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// input
+ 	XEN_DOMCTL_OUT(get_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// output, vcpu input
+ //	XEN_DOMCTL(set_opt_feature, xen_domctl_set_opt_feature, set_opt_feature)	// only ia64
+diff --git a/structures.h b/structures.h
+index 13994c6..10b2b33 100644
+--- a/structures.h
++++ b/structures.h
+@@ -334,11 +334,13 @@ START_STRUCT(xen_domctl_vcpucontext)
+ END_STRUCT(xen_domctl_vcpucontext)
+ #undef STRUCT
+ 
++#ifdef XEN_DOMCTL_max_vcpus
+ #define STRUCT struct xen_domctl_max_vcpus
+ START_STRUCT(xen_domctl_max_vcpus)
+ 	BASE_ITEM(u32, max)
+ END_STRUCT(xen_domctl_max_vcpus)
+ #undef STRUCT
++#endif
+ 
+ #define STRUCT struct xen_domctl_setdomainhandle
+ START_STRUCT(xen_domctl_setdomainhandle)
+@@ -445,6 +447,7 @@ START_STRUCT(xen_domctl_ioport_mapping)
+ END_STRUCT(xen_domctl_ioport_mapping)
+ #undef STRUCT
+ 
++#ifdef XEN_DOMCTL_pin_mem_cacheattr
+ #define STRUCT struct xen_domctl_pin_mem_cacheattr
+ START_STRUCT(xen_domctl_pin_mem_cacheattr)
+ 	BASE_ITEM(u64, start)
+@@ -452,6 +455,7 @@ START_STRUCT(xen_domctl_pin_mem_cacheattr)
+ 	BASE_ITEM(u32, type)
+ END_STRUCT(xen_domctl_pin_mem_cacheattr)
+ #undef STRUCT
++#endif
+ 
+ #define STRUCT struct xen_domctl_ext_vcpucontext
+ START_STRUCT(xen_domctl_ext_vcpucontext)
+@@ -605,15 +609,6 @@ START_STRUCT(xen_domctl_gdbsx_memio)
+ END_STRUCT(xen_domctl_gdbsx_memio)
+ #undef STRUCT
+ 
+-#define STRUCT struct xen_domctl_getmemlist
+-START_STRUCT(xen_domctl_getmemlist)
+-	BASE_ITEM(u64, max_pfns)
+-	BASE_ITEM(u64, start_pfn)
+-	BASE_ITEM(p64, buffer)
+-	BASE_ITEM(u64, num_pfns)
+-END_STRUCT(xen_domctl_getmemlist)
+-#undef STRUCT
+-
+ #ifdef XEN_DOMCTL_getpageframeinfo
+ #define STRUCT struct xen_domctl_getpageframeinfo
+ START_STRUCT(xen_domctl_getpageframeinfo)

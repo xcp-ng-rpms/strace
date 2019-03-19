@@ -1,0 +1,1499 @@
+Add support for Xen ioctls
+
+From: Frediano Ziglio <frediano.ziglio@citrix.com>
+
+Signed-off-by: Frediano Ziglio <frediano.ziglio@citrix.com>
+
+diff --git a/Makefile.am b/Makefile.am
+index cf89294..644f71b 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -71,7 +71,7 @@ else
+ strace_CPPFLAGS = $(AM_CPPFLAGS)
+ endif
+ 
+-noinst_HEADERS = defs.h structs.h
++noinst_HEADERS = defs.h structs.h hypercall.h structures.h
+ # Enable this to get link map generated
+ #strace_CFLAGS = $(AM_CFLAGS) -Wl,-Map=strace.mapfile
+ 
+diff --git a/exact_test.c b/exact_test.c
+index cfcfde2..f0ff51f 100644
+--- a/exact_test.c
++++ b/exact_test.c
+@@ -35,10 +35,17 @@
+ #include <stdarg.h>
+ #include <stddef.h>
+ 
++#include <sys/ioctl.h>
++#include <xenctrl.h>
++#include <xen/sys/evtchn.h>
++#include <xen/sys/privcmd.h>
++#include <xen/domctl.h>
++#include <xen/sched.h>
++
+ #include "structs.h"
+ 
+ static struct tcb g_tcb;
+-static int g_entering, g_verbose;
++static int g_entering, g_verbose = 1;
+ static char *print_buf_begin, *print_buf, *print_buf_end;
+ 
+ static void
+@@ -191,6 +198,7 @@ int main(void)
+ 	print_status ps;
+ 	int i;
+ 	static int array[4] = { 123, 263, -2351, -3465 };
++	privcmd_hypercall_t hc;
+ 
+ 	/* assert a not handled is returned for invalid IOCTL */
+ 	g_tcb.u_arg[1] = 1;
+@@ -233,8 +241,59 @@ int main(void)
+ 	status_flush(&ps);
+ 	check_result("{x=12345,y=-87654,uuid=12345678-9abc-def0-a2d910477eb5ec23,array1=[100,87,74,61,48],array2=BADPTR:0x1234567}");
+ 
+-	free(print_buf_begin);
++	/* check event channel IOCTLs */
++	g_verbose = 1;
++
++#ifdef IOCTL_EVTCHN_BIND_VIRQ
++	struct ioctl_evtchn_bind_virq virq = { 6743 };
++	g_tcb.u_arg[1] = IOCTL_EVTCHN_BIND_VIRQ;
++	g_tcb.u_arg[2] = mem_addbuf(&virq, sizeof(virq));
++	g_entering = 1;
++	assert(ioctl_decode_exact(&g_tcb) == 1);
++	mock_tprints("<-|->");
++	g_entering = 0;
++	assert(ioctl_decode_exact(&g_tcb) == 1);
++	check_result("IOCTL_EVTCHN_BIND_VIRQ, {virq=6743}<-|->");
++#endif
++
++#ifdef IOCTL_EVTCHN_RESET
++	g_tcb.u_arg[1] = IOCTL_EVTCHN_RESET;
++	g_tcb.u_arg[2] = 0xabcdef;
++	g_entering = 1;
++	assert(ioctl_decode_exact(&g_tcb) == 1);
++	mock_tprints("<-|->");
++	g_entering = 0;
++	assert(ioctl_decode_exact(&g_tcb) == 1);
++	check_result("IOCTL_EVTCHN_RESET, 0xabcdef<-|->");
++#endif
++
++#ifdef XENMEM_maximum_ram_page
++	hc.op = __HYPERVISOR_memory_op;
++	hc.arg[0] = XENMEM_maximum_ram_page;
++	hc.arg[1] = 0x12345678;
++	g_tcb.u_arg[1] = IOCTL_PRIVCMD_HYPERCALL;
++	g_tcb.u_arg[2] = mem_addbuf(&hc, sizeof(hc));
++	g_entering = 1;
++	assert(ioctl_decode_exact(&g_tcb) == 1);
++	mock_tprints("<-|->");
++	g_entering = 0;
++	assert(ioctl_decode_exact(&g_tcb) == 1);
++	check_result("IOCTL_PRIVCMD_HYPERCALL, {op=memory_op,cmd=maximum_ram_page}<-|->");
++
++	hc.op = __HYPERVISOR_memory_op;
++	hc.arg[0] = XENMEM_populate_physmap;
++	hc.arg[1] = 0x1234567;
++	g_tcb.u_arg[1] = IOCTL_PRIVCMD_HYPERCALL;
++	g_tcb.u_arg[2] = mem_addbuf(&hc, sizeof(hc));
++	g_entering = 1;
++	assert(ioctl_decode_exact(&g_tcb) == 1);
++	mock_tprints("<-|->");
++	g_entering = 0;
++	assert(ioctl_decode_exact(&g_tcb) == 1);
++	check_result("IOCTL_PRIVCMD_HYPERCALL, {op=memory_op,cmd=populate_physmap,BADPTR:0x1234567}<-|->");
++#endif
+ 
++	free(print_buf_begin);
+ 	return 0;
+ }
+ 
+diff --git a/hypercall.h b/hypercall.h
+new file mode 100644
+index 0000000..7e712a5
+--- /dev/null
++++ b/hypercall.h
+@@ -0,0 +1,130 @@
++#define STRUCT privcmd_hypercall_t
++static void
++print_hypercall_enter(print_status *status, const privcmd_hypercall_t *data)
++{
++	const base_type* type = NULL;
++	const char *name = NULL;
++	int have_args = 1;
++
++#define HYPERCALL_NOARG(_name) case XENMEM_ ## _name: \
++	name = #_name; \
++	have_args = 0; \
++	break;
++#define HYPERCALL(_name, struct, item) case XENMEM_ ## _name: \
++	name = #_name; \
++	type = &type_ ## struct.base; \
++	break;
++#define HYPERCALL_OUT(name, struct, item) HYPERCALL_NOARG(name)
++
++	switch (data->arg[0]) {
++	HYPERCALL(increase_reservation, xen_memory_reservation, reservation) // extent_start out
++	HYPERCALL(decrease_reservation, xen_memory_reservation, reservation) // extent_start in
++	HYPERCALL_NOARG(maximum_ram_page)
++	HYPERCALL(current_reservation, domid, domid)
++	HYPERCALL(maximum_reservation, domid, domid)
++	HYPERCALL_OUT(machphys_mfn_list, xen_machphys_mfn_list, machphys_mfn_list)	// mostly out
++	HYPERCALL(populate_physmap, xen_memory_reservation, reservation)	// extent_start in/out
++	HYPERCALL(add_to_physmap, xen_add_to_physmap, add_to_physmap)	// input ??
++	HYPERCALL_OUT(memory_map, xen_memory_map, memory_map)	// some input!
++	HYPERCALL_OUT(machine_memory_map, xen_memory_map, memory_map)	// like memory_map
++	HYPERCALL(exchange, xen_memory_exchange, exchange)	// some in some out
++	HYPERCALL_OUT(machphys_mapping, xen_machphys_mapping, machphys_mapping)
++	HYPERCALL(set_memory_map, xen_foreign_memory_map, foreign_memory_map)
++	HYPERCALL_NOARG(maximum_gpfn)
++	// defined in memory but no union for it in privcmd
++//	HYPERCALL(set_pod_target, xen_pod_target, )	// input
++//	HYPERCALL_OUT(get_pod_target, xen_pod_target, )
++	HYPERCALL_NOARG(get_sharing_freed_pages)
++#undef HYPERCALL_NOARG
++#undef HYPERCALL
++#undef HYPERCALL_OUT
++	}
++
++	status_printf(status, "{op=memory_op,");
++	if (name)
++		status_printf(status, "cmd=%s", name);
++	else
++		status_printf(status, "cmd=UNKNOWN(%lu)", data->arg[0]);
++	status_printf(status, have_args ? "," : "}");
++
++	if (type) {
++		char buf[1024];
++		if (type->size > sizeof(buf) || umoven(status->tcp, data->arg[1], type->size, buf) < 0)
++	                status_printf(status, "BADPTR:%#lx", (long) data->arg[1]);
++		else
++			type->print(status, buf, type);
++		if (have_args)
++			status_printf(status, "}");
++	}
++}
++
++static void
++print_hypercall_exit(print_status *status, const privcmd_hypercall_t *data)
++{
++	const base_type* type = NULL;
++
++#define HYPERCALL_NOARG(_name) case XENMEM_ ## _name: \
++	break;
++// print just end
++#define HYPERCALL(name, struct, item) HYPERCALL_NOARG(name)
++// print
++#define HYPERCALL_OUT(_name, struct, item) case XENMEM_ ## _name: \
++	type = &type_ ## struct.base; \
++	break;
++
++	switch (data->arg[0]) {
++	HYPERCALL(increase_reservation, xen_memory_reservation, reservation) // extent_start out
++	HYPERCALL(decrease_reservation, xen_memory_reservation, reservation) // extent_start in
++	HYPERCALL_NOARG(maximum_ram_page)
++	HYPERCALL(current_reservation, domid, domid)
++	HYPERCALL(maximum_reservation, domid, domid)
++	HYPERCALL_OUT(machphys_mfn_list, xen_machphys_mfn_list, machphys_mfn_list)	// mostly out
++	HYPERCALL(populate_physmap, xen_memory_reservation, reservation)	// extent_start in/out
++	HYPERCALL(add_to_physmap, xen_add_to_physmap, add_to_physmap)	// input ??
++	HYPERCALL_OUT(memory_map, xen_memory_map, memory_map)	// some input!
++	HYPERCALL_OUT(machine_memory_map, xen_memory_map, memory_map)	// like memory_map
++	HYPERCALL(exchange, xen_memory_exchange, exchange)	// some in some out
++	HYPERCALL_OUT(machphys_mapping, xen_machphys_mapping, machphys_mapping)
++	HYPERCALL(set_memory_map, xen_foreign_memory_map, foreign_memory_map)
++	HYPERCALL_NOARG(maximum_gpfn)
++	// defined in memory but no union for it in privcmd
++//	HYPERCALL(set_pod_target, xen_pod_target, )	// input
++//	HYPERCALL_OUT(get_pod_target, xen_pod_target, )
++	HYPERCALL_NOARG(get_sharing_freed_pages)
++#undef HYPERCALL_NOARG
++#undef HYPERCALL
++#undef HYPERCALL_OUT
++	}
++
++	if (type) {
++		char buf[1024];
++		if (type->size > sizeof(buf) || umoven(status->tcp, data->arg[1], type->size, buf) < 0)
++	                status_printf(status, "BADPTR:%#lx", (long) data->arg[1]);
++		else
++			type->print(status, buf, type);
++	}
++
++	status_printf(status, "}");
++}
++
++static void
++print_hypercall(print_status *status, const void *_data, const void *dummy)
++{
++	const privcmd_hypercall_t *data = (const privcmd_hypercall_t *)_data;
++
++	if (data->op == __HYPERVISOR_memory_op) {
++		if (status->entering)
++			print_hypercall_enter(status, data);
++		else
++			print_hypercall_exit(status, data);
++	} else {
++		type_privcmd_hypercall.base.print(status, _data, &type_privcmd_hypercall.base);
++	}
++}
++
++static const type_base type_hypercall = {
++	{ print_hypercall, sizeof(STRUCT) }
++};
++#undef STRUCT
++
++
+diff --git a/ioctlexact.c b/ioctlexact.c
+index 7d11b12..3a9aacc 100644
+--- a/ioctlexact.c
++++ b/ioctlexact.c
+@@ -31,12 +31,561 @@
+ #  include "defs.h"
+ #endif
+ 
++#include <stddef.h>
++#include <stdarg.h>
++
++#include <sys/ioctl.h>
++#include <xenctrl.h>
++#include <xen/sys/evtchn.h>
++#include <xen/sys/privcmd.h>
++#include <xen/domctl.h>
++#include <xen/sched.h>
++
++#include "structs.h"
++#include "structures.h"
++
++// TODO finish
++#ifdef IOCTL_PRIVCMD_HVMOP
++
++#define STRUCT privcmd_hvmop_t
++static const switch_item privcmd_hvmop_cmd_items[] = {
++#define HVMOP(name, type, output) \
++	{ HVMOP_ ## name, #name, &type_ ## type.base, output },
++	HVMOP(set_param, xen_hvm_param, 0)
++// TODO output !!!
++	HVMOP(get_param, xen_hvm_param, 1)
++	HVMOP(set_pci_intx_level, xen_hvm_set_pci_intx_level, 0)
++	HVMOP(set_isa_irq_level, xen_hvm_set_isa_irq_level, 0)
++	HVMOP(set_pci_link_route, xen_hvm_set_pci_link_route, 0)
++	HVMOP(flush_tlbs, void, 0)
++// HVMOP_track_dirty_vram
++	HVMOP(modified_memory, xen_hvm_modified_memory, 0)
++	HVMOP(set_mem_type, xen_hvm_set_mem_type, 0)
++	HVMOP(process_dying, void, 0)
++	HVMOP(pagetable_dying, xen_hvm_pagetable_dying, 0)
++// TODO output !!!
++	HVMOP(get_time, xen_hvm_get_time, 1)
++	HVMOP(xentrace, xen_hvm_xentrace, 0)
++	HVMOP(set_mem_access, xen_hvm_set_mem_access, 0)
++// TODO output !!!
++	HVMOP(get_mem_access, xen_hvm_get_mem_access, 1)
++	HVMOP(inject_trap, xen_hvm_inject_trap, 0)
++// TODO output !!!
++	HVMOP(get_mem_type, xen_hvm_get_mem_type, 1)
++	HVMOP(set_driver_version, xen_hvm_set_driver_version, 0)
++	{ 0, NULL, }
++};
++
++static const type_switch type_privcmd_hvmop_cmd = {
++	{ print_switch, sizeof(unsigned) },
++	privcmd_hvmop_cmd_items,
++	offsetof(privcmd_hvmop_t, u) - offsetof(privcmd_hvmop_t, cmd)
++};
++START_STRUCT(privcmd_hvmop)
++	BASE_ITEM(privcmd_hvmop_cmd, cmd)
++END_STRUCT(privcmd_hvmop)
++#undef STRUCT
++#endif
++
++#if 0
++#define STRUCT privcmd_memop_t
++static switch_item privcmd_memop_cmd_items[] = {
++	{ XENMEM_increase_reservation,   "increase_reservation",   &type_reservation },
++	{ XENMEM_decrease_reservation,   "decrease_reservation",   &type_reservation }, 
++	{ XENMEM_populate_physmap,       "populate_physmap",       &type_reservation },
++	{ XENMEM_exchange,               "exchange",               &type_exchange },
++	{ XENMEM_maximum_gpfn,           "maximum_gpfn",           &type_void },
++	{ XENMEM_maximum_ram_page,       "maximum_ram_page",       &type_domid },
++	{ XENMEM_current_reservation,    "current_reservation",    &type_domid },
++	{ XENMEM_maximum_reservation,    "maximum_reservation",    &type_domid },
++	{ XENMEM_add_to_physmap,         "add_to_physmap",         &type_add_to_physmap },
++	{ XENMEM_set_memory_map,         "set_memory_map",         &type_foreign_memory_map },
++	{ XENMEM_machphys_mfn_list,      "machphys_mfn_list",      &type_machphys_mfn_list },
++	{ XENMEM_machphys_mapping,       "machphys_mapping",       &type_machphys_mapping },
++	{ XENMEM_memory_map,             "memory_map",             &type_memory_map },
++	{ XENMEM_machine_memory_map,     "machine_memory_map",     &type_memory_map },
++	{ XENMEM_get_sharing_freed_pages,"get_sharing_freed_pages",&type_void },
++// XENMEM_set_pod_target and XENMEM_get_pod_target ??
++	{ 0, NULL, }
++};
++static const type_switch type_privcmd_memop_cmd = {
++	print_switch,
++	sizeof(unsigned),
++	privcmd_memop_cmd_items,
++	offsetof(privcmd_memop_t, u) - offsetof(privcmd_memop_t, cmd)
++};
++START_STRUCT(privcmd_memop)
++	BASE_ITEM(privcmd_memop_cmd, cmd)
++END_STRUCT(privcmd_memop)
++#undef STRUCT
++#endif
++
++static void
++print_xen_domctl_bind_pt_irq(print_status *status, const void *_data, const void *dummy)
++{
++	const struct xen_domctl_bind_pt_irq *data = (const struct xen_domctl_bind_pt_irq*)_data;
++
++	status_printf(status, "{machine_irq=%u,", data->machine_irq);
++	status_printf(status, "irq_type=%u,", data->irq_type);
++	status_printf(status, "hvm_domid=%u,", data->hvm_domid);
++	switch (data->irq_type) {
++	case PT_IRQ_TYPE_PCI:
++		status_printf(status, "{pci=%u,%u,%u}", data->u.pci.bus, data->u.pci.device, data->u.pci.intx);
++		break;
++	case PT_IRQ_TYPE_ISA:
++		status_printf(status, "{isa=%u}", data->u.isa.isa_irq);
++		break;
++	case PT_IRQ_TYPE_MSI:
++	case PT_IRQ_TYPE_MSI_TRANSLATE:
++		status_printf(status, "{msi=%u,%u", data->u.msi.gvec, data->u.msi.gflags);
++		status_printf(status, "%" PRIu64 "}", data->u.msi.gtable);
++		break;
++	}
++	status_printf(status, "}");
++}
++
++static const type_base type_xen_domctl_bind_pt_irq = {
++	{ print_xen_domctl_bind_pt_irq, sizeof(struct xen_domctl_bind_pt_irq) }
++};
++
++#define STRUCT struct xen_domctl
++static void
++print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
++{
++	const base_type* type = NULL;
++	const char *name = NULL;
++
++#define XEN_DOMCTL_NOARG(_name) case XEN_DOMCTL_ ## _name: \
++	name = #_name; \
++	break;
++#define XEN_DOMCTL(_name, struct, item) case XEN_DOMCTL_ ## _name: \
++	name = #_name; \
++	type = &type_ ## struct.base; \
++	break;
++#define XEN_DOMCTL_OUT(name, struct, item) XEN_DOMCTL_NOARG(name)
++
++	switch (data->cmd) {
++	XEN_DOMCTL(createdomain, xen_domctl_createdomain, createdomain)	// .domain output
++	XEN_DOMCTL_NOARG(destroydomain)
++	XEN_DOMCTL_NOARG(pausedomain)
++	XEN_DOMCTL_NOARG(unpausedomain)
++	XEN_DOMCTL_OUT(getdomaininfo, xen_domctl_getdomaininfo, getdomaininfo)	// output
++	XEN_DOMCTL_OUT(getmemlist, xen_domctl_getmemlist, getmemlist)		// output, max_pfns input
++	XEN_DOMCTL_OUT(getpageframeinfo, xen_domctl_getpageframeinfo, getpageframeinfo)	// output, gmfn in
++	XEN_DOMCTL_OUT(getpageframeinfo2, xen_domctl_getpageframeinfo2, getpageframeinfo2)	// num, array input, array output
++	XEN_DOMCTL(setvcpuaffinity, xen_domctl_vcpuaffinity, vcpuaffinity)	// input
++//	XEN_DOMCTL(shadow_op, xen_domctl_shadow_op, shadow_op)	// input/output ??
++	XEN_DOMCTL(max_mem, xen_domctl_max_mem, max_mem)	// input, (set mem)
++	XEN_DOMCTL(setvcpucontext, xen_domctl_vcpucontext, vcpucontext)	// input
++	XEN_DOMCTL_OUT(getvcpucontext, xen_domctl_vcpucontext, vcpucontext)	// vcpu in output
++	XEN_DOMCTL_OUT(getvcpuinfo, xen_domctl_getvcpuinfo, getvcpuinfo)	// vcpu in, output
++	XEN_DOMCTL(max_vcpus, xen_domctl_max_vcpus, max_vcpus)		// input
++//	XEN_DOMCTL(scheduler_op, xen_domctl_scheduler_op, scheduler_op)	// depends ??
++	XEN_DOMCTL(setdomainhandle, xen_domctl_setdomainhandle, setdomainhandle)	// input
++	XEN_DOMCTL(setdebugging, xen_domctl_setdebugging, setdebugging)	// input
++	XEN_DOMCTL(irq_permission, xen_domctl_irq_permission, irq_permission)	// input
++	XEN_DOMCTL(iomem_permission, xen_domctl_iomem_permission, iomem_permission)	// input
++	XEN_DOMCTL(ioport_permission, xen_domctl_ioport_permission, ioport_permission)	// input
++	XEN_DOMCTL(hypercall_init, xen_domctl_hypercall_init, hypercall_init)	// input
++//	XEN_DOMCTL(arch_setup, xen_domctl_arch_setup, arch_setup)		// only ia64
++	XEN_DOMCTL(settimeoffset, xen_domctl_settimeoffset, settimeoffset)	// input
++	XEN_DOMCTL_OUT(getvcpuaffinity, xen_domctl_vcpuaffinity, vcpuaffinity)	// output
++//	XEN_DOMCTL(real_mode_area, xen_domctl_real_mode_area, real_mode_area)	// unused!
++	XEN_DOMCTL_NOARG(resumedomain)
++	XEN_DOMCTL(sendtrigger, xen_domctl_sendtrigger, sendtrigger)	// input
++	XEN_DOMCTL(subscribe, xen_domctl_subscribe, subscribe)	// input
++	XEN_DOMCTL_OUT(gethvmcontext, xen_domctl_hvmcontext, hvmcontext)	// output
++	XEN_DOMCTL(sethvmcontext, xen_domctl_hvmcontext, hvmcontext)	// input
++	XEN_DOMCTL(set_address_size, xen_domctl_address_size, address_size)	// input
++	XEN_DOMCTL_OUT(get_address_size, xen_domctl_address_size, address_size)	// output
++	XEN_DOMCTL(assign_device, xen_domctl_assign_device, assign_device)	// input
++	XEN_DOMCTL(bind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input ??
++	XEN_DOMCTL(memory_mapping, xen_domctl_memory_mapping, memory_mapping)	// input
++	XEN_DOMCTL(ioport_mapping, xen_domctl_ioport_mapping, ioport_mapping)	// input
++	XEN_DOMCTL(pin_mem_cacheattr, xen_domctl_pin_mem_cacheattr, pin_mem_cacheattr)	// input
++	XEN_DOMCTL(set_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// input
++	XEN_DOMCTL_OUT(get_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// output, vcpu input
++//	XEN_DOMCTL(set_opt_feature, xen_domctl_set_opt_feature, set_opt_feature)	// only ia64
++	XEN_DOMCTL(test_assign_device, xen_domctl_assign_device, assign_device)	// input
++	XEN_DOMCTL(set_target, xen_domctl_set_target, set_target)	// input
++	XEN_DOMCTL(deassign_device, xen_domctl_assign_device, assign_device)	// input
++	XEN_DOMCTL(unbind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input
++#if defined(__i386__) || defined(__x86_64__)
++	XEN_DOMCTL(set_cpuid, xen_domctl_cpuid, cpuid)	// input
++#endif
++	XEN_DOMCTL_OUT(get_device_group, xen_domctl_get_device_group, get_device_group)	// output, machine_bdf, max_sdevs input
++	XEN_DOMCTL(set_machine_address_size, xen_domctl_address_size, address_size)	// input
++	XEN_DOMCTL_OUT(get_machine_address_size, xen_domctl_address_size, address_size)	// output
++	XEN_DOMCTL_NOARG(suppress_spurious_page_faults)
++	XEN_DOMCTL(debug_op, xen_domctl_debug_op, debug_op)	// input
++	XEN_DOMCTL_OUT(gethvmcontext_partial, xen_domctl_hvmcontext_partial, hvmcontext_partial)	// output, type, instance input
++	XEN_DOMCTL(mem_event_op, xen_domctl_mem_event_op, mem_event_op)	// input
++//	XEN_DOMCTL(mem_sharing_op, xen_domctl_mem_sharing_op, mem_sharing_op)	// depends
++	XEN_DOMCTL(disable_migrate, xen_domctl_disable_migrate, disable_migrate)	// input
++	XEN_DOMCTL_OUT(gettscinfo, xen_domctl_tsc_info, tsc_info)	// output
++	XEN_DOMCTL(settscinfo, xen_domctl_tsc_info, tsc_info)	// input
++	// TODO handle input and output of same field
++	XEN_DOMCTL(getpageframeinfo3, xen_domctl_getpageframeinfo3, getpageframeinfo3)	// num, array input, array output
++	XEN_DOMCTL(setvcpuextstate, xen_domctl_vcpuextstate, vcpuextstate)	// input
++	XEN_DOMCTL_OUT(getvcpuextstate, xen_domctl_vcpuextstate, vcpuextstate)	// output, vcpu, size, xfeature_mask input
++	XEN_DOMCTL(set_access_required, xen_domctl_set_access_required, access_required)	// input
++	XEN_DOMCTL_OUT(get_runstate_info, xen_domctl_runstate_info, domain_runstate)	// output
++	XEN_DOMCTL(setcorespersocket, xen_domctl_corespersocket, corespersocket)	// input
++	XEN_DOMCTL_OUT(gdbsx_guestmemio, xen_domctl_gdbsx_memio, gdbsx_guest_memio)	// see structure, mostly input
++	XEN_DOMCTL(gdbsx_pausevcpu, xen_domctl_gdbsx_pauseunp_vcpu, gdbsx_pauseunp_vcpu)	// input
++	XEN_DOMCTL(gdbsx_unpausevcpu, xen_domctl_gdbsx_pauseunp_vcpu, gdbsx_pauseunp_vcpu)	// input
++	XEN_DOMCTL_OUT(gdbsx_domstatus, xen_domctl_gdbsx_domstatus, gdbsx_domstatus)	// output
++#undef XEN_DOMCTL_NOARG
++#undef XEN_DOMCTL
++#undef XEN_DOMCTL_OUT
++	}
++
++	if (name)
++		status_printf(status, "{cmd=%s", name);
++	else
++		status_printf(status, "{cmd=UNKNOWN(%lu)", data->cmd);
++
++	status_printf(status, ",dom=%u,int=%u,", data->domain, (unsigned) data->interface_version);
++
++	if (type)
++		type->print(status, &data->u, type);
++}
++
++static void
++print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
++{
++	const base_type* type = NULL;
++
++#define XEN_DOMCTL_NOARG(_name) case XEN_DOMCTL_ ## _name: \
++	break;
++// print just end
++#define XEN_DOMCTL(name, struct, item) XEN_DOMCTL_NOARG(name)
++// print
++#define XEN_DOMCTL_OUT(_name, struct, item) case XEN_DOMCTL_ ## _name: \
++	type = &type_ ## struct.base; \
++	break;
++
++	switch (data->cmd) {
++	XEN_DOMCTL(createdomain, xen_domctl_createdomain, createdomain)	// .domain output
++	XEN_DOMCTL_NOARG(destroydomain)
++	XEN_DOMCTL_NOARG(pausedomain)
++	XEN_DOMCTL_NOARG(unpausedomain)
++	XEN_DOMCTL_OUT(getdomaininfo, xen_domctl_getdomaininfo, getdomaininfo)	// output
++	XEN_DOMCTL_OUT(getmemlist, xen_domctl_getmemlist, getmemlist)		// output, max_pfns input
++	XEN_DOMCTL_OUT(getpageframeinfo, xen_domctl_getpageframeinfo, getpageframeinfo)	// output, gmfn in
++	XEN_DOMCTL_OUT(getpageframeinfo2, xen_domctl_getpageframeinfo2, getpageframeinfo2)	// num, array input, array output
++	XEN_DOMCTL(setvcpuaffinity, xen_domctl_vcpuaffinity, vcpuaffinity)	// input
++//	XEN_DOMCTL(shadow_op, xen_domctl_shadow_op, shadow_op)	// input/output ??
++	XEN_DOMCTL(max_mem, xen_domctl_max_mem, max_mem)	// input, (set mem)
++	XEN_DOMCTL(setvcpucontext, xen_domctl_vcpucontext, vcpucontext)	// input
++	XEN_DOMCTL_OUT(getvcpucontext, xen_domctl_vcpucontext, vcpucontext)	// vcpu in output
++	XEN_DOMCTL_OUT(getvcpuinfo, xen_domctl_getvcpuinfo, getvcpuinfo)	// vcpu in, output
++	XEN_DOMCTL(max_vcpus, xen_domctl_max_vcpus, max_vcpus)		// input
++//	XEN_DOMCTL(scheduler_op, xen_domctl_scheduler_op, scheduler_op)	// depends ??
++	XEN_DOMCTL(setdomainhandle, xen_domctl_setdomainhandle, setdomainhandle)	// input
++	XEN_DOMCTL(setdebugging, xen_domctl_setdebugging, setdebugging)	// input
++	XEN_DOMCTL(irq_permission, xen_domctl_irq_permission, irq_permission)	// input
++	XEN_DOMCTL(iomem_permission, xen_domctl_iomem_permission, iomem_permission)	// input
++	XEN_DOMCTL(ioport_permission, xen_domctl_ioport_permission, ioport_permission)	// input
++	XEN_DOMCTL(hypercall_init, xen_domctl_hypercall_init, hypercall_init)	// input
++//	XEN_DOMCTL(arch_setup, xen_domctl_arch_setup, arch_setup)		// only ia64
++	XEN_DOMCTL(settimeoffset, xen_domctl_settimeoffset, settimeoffset)	// input
++	XEN_DOMCTL_OUT(getvcpuaffinity, xen_domctl_vcpuaffinity, vcpuaffinity)	// output
++//	XEN_DOMCTL(real_mode_area, xen_domctl_real_mode_area, real_mode_area)	// unused!
++	XEN_DOMCTL_NOARG(resumedomain)
++	XEN_DOMCTL(sendtrigger, xen_domctl_sendtrigger, sendtrigger)	// input
++	XEN_DOMCTL(subscribe, xen_domctl_subscribe, subscribe)	// input
++	XEN_DOMCTL_OUT(gethvmcontext, xen_domctl_hvmcontext, hvmcontext)	// output
++	XEN_DOMCTL(sethvmcontext, xen_domctl_hvmcontext, hvmcontext)	// input
++	XEN_DOMCTL(set_address_size, xen_domctl_address_size, address_size)	// input
++	XEN_DOMCTL_OUT(get_address_size, xen_domctl_address_size, address_size)	// output
++	XEN_DOMCTL(assign_device, xen_domctl_assign_device, assign_device)	// input
++	XEN_DOMCTL(bind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input ??
++	XEN_DOMCTL(memory_mapping, xen_domctl_memory_mapping, memory_mapping)	// input
++	XEN_DOMCTL(ioport_mapping, xen_domctl_ioport_mapping, ioport_mapping)	// input
++	XEN_DOMCTL(pin_mem_cacheattr, xen_domctl_pin_mem_cacheattr, pin_mem_cacheattr)	// input
++	XEN_DOMCTL(set_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// input
++	XEN_DOMCTL_OUT(get_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// output, vcpu input
++//	XEN_DOMCTL(set_opt_feature, xen_domctl_set_opt_feature, set_opt_feature)	// only ia64
++	XEN_DOMCTL(test_assign_device, xen_domctl_assign_device, assign_device)	// input
++	XEN_DOMCTL(set_target, xen_domctl_set_target, set_target)	// input
++	XEN_DOMCTL(deassign_device, xen_domctl_assign_device, assign_device)	// input
++	XEN_DOMCTL(unbind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input
++#if defined(__i386__) || defined(__x86_64__)
++	XEN_DOMCTL(set_cpuid, xen_domctl_cpuid, cpuid)	// input
++#endif
++	XEN_DOMCTL_OUT(get_device_group, xen_domctl_get_device_group, get_device_group)	// output, machine_bdf, max_sdevs input
++	XEN_DOMCTL(set_machine_address_size, xen_domctl_address_size, address_size)	// input
++	XEN_DOMCTL_OUT(get_machine_address_size, xen_domctl_address_size, address_size)	// output
++	XEN_DOMCTL_NOARG(suppress_spurious_page_faults)
++	XEN_DOMCTL(debug_op, xen_domctl_debug_op, debug_op)	// input
++	XEN_DOMCTL_OUT(gethvmcontext_partial, xen_domctl_hvmcontext_partial, hvmcontext_partial)	// output, type, instance input
++	XEN_DOMCTL(mem_event_op, xen_domctl_mem_event_op, mem_event_op)	// input
++//	XEN_DOMCTL(mem_sharing_op, xen_domctl_mem_sharing_op, mem_sharing_op)	// depends
++	XEN_DOMCTL(disable_migrate, xen_domctl_disable_migrate, disable_migrate)	// input
++	XEN_DOMCTL_OUT(gettscinfo, xen_domctl_tsc_info, tsc_info)	// output
++	XEN_DOMCTL(settscinfo, xen_domctl_tsc_info, tsc_info)	// input
++	// TODO handle input and output of same field
++	XEN_DOMCTL(getpageframeinfo3, xen_domctl_getpageframeinfo3, getpageframeinfo3)	// num, array input, array output
++	XEN_DOMCTL(setvcpuextstate, xen_domctl_vcpuextstate, vcpuextstate)	// input
++	XEN_DOMCTL_OUT(getvcpuextstate, xen_domctl_vcpuextstate, vcpuextstate)	// output, vcpu, size, xfeature_mask input
++	XEN_DOMCTL(set_access_required, xen_domctl_set_access_required, access_required)	// input
++	XEN_DOMCTL_OUT(get_runstate_info, xen_domctl_runstate_info, domain_runstate)	// output
++	XEN_DOMCTL(setcorespersocket, xen_domctl_corespersocket, corespersocket)	// input
++	XEN_DOMCTL_OUT(gdbsx_guestmemio, xen_domctl_gdbsx_memio, gdbsx_guest_memio)	// see structure, mostly input
++	XEN_DOMCTL(gdbsx_pausevcpu, xen_domctl_gdbsx_pauseunp_vcpu, gdbsx_pauseunp_vcpu)	// input
++	XEN_DOMCTL(gdbsx_unpausevcpu, xen_domctl_gdbsx_pauseunp_vcpu, gdbsx_pauseunp_vcpu)	// input
++	XEN_DOMCTL_OUT(gdbsx_domstatus, xen_domctl_gdbsx_domstatus, gdbsx_domstatus)	// output
++#undef XEN_DOMCTL_NOARG
++#undef XEN_DOMCTL
++#undef XEN_DOMCTL_OUT
++	}
++
++	if (type)
++		type->print(status, &data->u, type);
++
++	status_printf(status, "}");
++}
++
++static void
++print_xen_domctl(print_status *status, const void *_data, const void *dummy)
++{
++	const struct xen_domctl *data = (const struct xen_domctl *)_data;
++	if (status->entering)
++		print_xen_domctl_enter(status, data);
++	else
++		print_xen_domctl_exit(status, data);
++}
++
++static const type_base type_xen_domctl = {
++	{ print_xen_domctl, sizeof(STRUCT) }
++};
++#undef STRUCT
++
++#ifdef IOCTL_PRIVCMD_MEMOP
++
++#define STRUCT struct privcmd_memop
++static void
++print_privcmd_memop_enter(print_status *status, const struct privcmd_memop *data)
++{
++	const base_type* type = NULL;
++	const char *name = NULL;
++
++#define PRIVCMD_MEMOP_NOARG(_name) case XENMEM_ ## _name: \
++	name = #_name; \
++	break;
++#define PRIVCMD_MEMOP(_name, struct, item) case XENMEM_ ## _name: \
++	name = #_name; \
++	type = &type_ ## struct.base; \
++	break;
++#define PRIVCMD_MEMOP_OUT(name, struct, item) PRIVCMD_MEMOP_NOARG(name)
++
++	switch (data->cmd) {
++	PRIVCMD_MEMOP(increase_reservation, xen_memory_reservation, reservation) // extent_start out
++	PRIVCMD_MEMOP(decrease_reservation, xen_memory_reservation, reservation) // extent_start in
++	PRIVCMD_MEMOP_NOARG(maximum_ram_page)
++	PRIVCMD_MEMOP(current_reservation, domid, domid)
++	PRIVCMD_MEMOP(maximum_reservation, domid, domid)
++	PRIVCMD_MEMOP_OUT(machphys_mfn_list, xen_machphys_mfn_list, machphys_mfn_list)	// mostly out
++	PRIVCMD_MEMOP(populate_physmap, xen_memory_reservation, reservation)	// extent_start in/out
++	PRIVCMD_MEMOP(add_to_physmap, xen_add_to_physmap, add_to_physmap)	// input ??
++	PRIVCMD_MEMOP_OUT(memory_map, xen_memory_map, memory_map)	// some input!
++	PRIVCMD_MEMOP_OUT(machine_memory_map, xen_memory_map, memory_map)	// like memory_map
++	PRIVCMD_MEMOP(exchange, xen_memory_exchange, exchange)	// some in some out
++	PRIVCMD_MEMOP_OUT(machphys_mapping, xen_machphys_mapping, machphys_mapping)
++	PRIVCMD_MEMOP(set_memory_map, xen_foreign_memory_map, foreign_memory_map)
++	PRIVCMD_MEMOP_NOARG(maximum_gpfn)
++	// defined in memory but no union for it in privcmd
++//	PRIVCMD_MEMOP(set_pod_target, xen_pod_target, )	// input
++//	PRIVCMD_MEMOP_OUT(get_pod_target, xen_pod_target, )
++	PRIVCMD_MEMOP_NOARG(get_sharing_freed_pages)
++#undef PRIVCMD_MEMOP_NOARG
++#undef PRIVCMD_MEMOP
++#undef PRIVCMD_MEMOP_OUT
++	}
++
++	if (name)
++		status_printf(status, "{cmd=%s", name);
++	else
++		status_printf(status, "{cmd=UNKNOWN(%lu)", data->cmd);
++
++	if (type)
++		type->print(status, &data->u, type);
++}
++
++static void
++print_privcmd_memop_exit(print_status *status, const struct privcmd_memop *data)
++{
++	const base_type* type = NULL;
++
++#define PRIVCMD_MEMOP_NOARG(_name) case XENMEM_ ## _name: \
++	break;
++// print just end
++#define PRIVCMD_MEMOP(name, struct, item) PRIVCMD_MEMOP_NOARG(name)
++// print
++#define PRIVCMD_MEMOP_OUT(_name, struct, item) case XENMEM_ ## _name: \
++	type = &type_ ## struct.base; \
++	break;
++
++	switch (data->cmd) {
++	PRIVCMD_MEMOP(increase_reservation, xen_memory_reservation, reservation) // extent_start out
++	PRIVCMD_MEMOP(decrease_reservation, xen_memory_reservation, reservation) // extent_start in
++	PRIVCMD_MEMOP_NOARG(maximum_ram_page)
++	PRIVCMD_MEMOP(current_reservation, domid, domid)
++	PRIVCMD_MEMOP(maximum_reservation, domid, domid)
++	PRIVCMD_MEMOP_OUT(machphys_mfn_list, xen_machphys_mfn_list, machphys_mfn_list)	// mostly out
++	PRIVCMD_MEMOP(populate_physmap, xen_memory_reservation, reservation)	// extent_start in/out
++	PRIVCMD_MEMOP(add_to_physmap, xen_add_to_physmap, add_to_physmap)	// input ??
++	PRIVCMD_MEMOP_OUT(memory_map, xen_memory_map, memory_map)	// some input!
++	PRIVCMD_MEMOP_OUT(machine_memory_map, xen_memory_map, memory_map)	// like memory_map
++	PRIVCMD_MEMOP(exchange, xen_memory_exchange, exchange)	// some in some out
++	PRIVCMD_MEMOP_OUT(machphys_mapping, xen_machphys_mapping, machphys_mapping)
++	PRIVCMD_MEMOP(set_memory_map, xen_foreign_memory_map, foreign_memory_map)
++	PRIVCMD_MEMOP_NOARG(maximum_gpfn)
++	// defined in memory but no union for it in privcmd
++//	PRIVCMD_MEMOP(set_pod_target, xen_pod_target, )	// input
++//	PRIVCMD_MEMOP_OUT(get_pod_target, xen_pod_target, )
++	PRIVCMD_MEMOP_NOARG(get_sharing_freed_pages)
++#undef PRIVCMD_MEMOP_NOARG
++#undef PRIVCMD_MEMOP
++#undef PRIVCMD_MEMOP_OUT
++	}
++
++	if (type)
++		type->print(status, &data->u, type);
++
++	status_printf(status, "}");
++}
++
++static void
++print_privcmd_memop(print_status *status, const void *_data, const void *dummy)
++{
++	const struct privcmd_memop *data = (const struct privcmd_memop *)_data;
++	if (status->entering)
++		print_privcmd_memop_enter(status, data);
++	else
++		print_privcmd_memop_exit(status, data);
++}
++
++static const type_base type_privcmd_memop = {
++	{ print_privcmd_memop, sizeof(STRUCT) }
++};
++#undef STRUCT
++
++#endif
++
++#include "hypercall.h"
++
++
++// for arrays ??
++
++static int
++decode_struct0(const char *code_name, const base_type *type_input, const base_type *type_output, struct tcb *tcp, long arg)
++{
++	/* this assume all structures are maximum 256 bytes */
++	char buf[256];
++	print_status pr;
++	const base_type *type;
++
++	status_init(&pr, tcp);
++	pr.entering = !!entering(tcp);
++
++	if (entering(tcp)) {
++		tprintf("%s, ", code_name);
++		if (!verbose(tcp))
++			tprintf("%#lx", arg);
++	}
++	if (!verbose(tcp))
++		return 1;
++
++	type = entering(tcp) ? type_input : type_output;
++	if (!type)
++		return 1;
++
++	if (umoven(tcp, arg, type->size, buf) < 0) {
++		tprintf("%#lx", arg);
++		return 1;
++	}
++	if (!entering(tcp)) tprints("->");
++	type->print(&pr, buf, type);
++	status_flush(&pr);
++	return 1;
++}
++
++#define decode_struct_input(code, struct) \
++	case code: return decode_struct0(#code, &type_ ## struct.base, NULL, tcp, arg)
++#define decode_struct_output(code, struct) \
++	case code: return decode_struct0(#code, NULL, &type_ ## struct.base, tcp, arg)
++#define decode_struct(code, istruct, ostruct) \
++	case code: return decode_struct0(#code, &type_ ## istruct.base, &type_ ## ostruct.base, tcp, arg)
++
+ /*
+  * Try to detect and handle the exact ioctl code
+  * return 1 if handled, 0 otherwise
+  */
+ int ioctl_decode_exact(struct tcb *tcp)
+ {
++	long code = tcp->u_arg[1];
++	long arg =  tcp->u_arg[2];
++
++	switch (code) {
++	/* Xen event channels */
++#ifdef IOCTL_EVTCHN_BIND_VIRQ
++	decode_struct_input(IOCTL_EVTCHN_BIND_VIRQ, evtchn_bind_virq);
++#endif
++#ifdef IOCTL_EVTCHN_BIND_INTERDOMAIN
++	decode_struct_input(IOCTL_EVTCHN_BIND_INTERDOMAIN, evtchn_bind_interdomain);
++#endif
++#ifdef IOCTL_EVTCHN_BIND_UNBOUND_PORT
++	decode_struct_input(IOCTL_EVTCHN_BIND_UNBOUND_PORT, evtchn_bind_unbound_port);
++#endif
++#ifdef IOCTL_EVTCHN_UNBIND
++	decode_struct_input(IOCTL_EVTCHN_UNBIND, evtchn_unbind);
++#endif
++#ifdef IOCTL_EVTCHN_NOTIFY
++	decode_struct_input(IOCTL_EVTCHN_NOTIFY, evtchn_notify);
++#endif
++#ifdef IOCTL_EVTCHN_RESET
++	case IOCTL_EVTCHN_RESET:
++		if (entering(tcp))
++			tprintf("IOCTL_EVTCHN_RESET, %#lx", arg);
++		return 1;
++#endif
++
++	/* Xen privcmd */
++#ifdef IOCTL_PRIVCMD_HYPERCALL
++	decode_struct_input(IOCTL_PRIVCMD_HYPERCALL, hypercall);
++#endif
++#ifdef IOCTL_PRIVCMD_MMAP
++	decode_struct_input(IOCTL_PRIVCMD_MMAP, privcmd_mmap);
++#endif
++#ifdef IOCTL_PRIVCMD_MMAPBATCH
++	decode_struct_output(IOCTL_PRIVCMD_MMAPBATCH, privcmd_mmapbatch);
++#endif
++#ifdef IOCTL_PRIVCMD_MMAPBATCH_V2
++	decode_struct_output(IOCTL_PRIVCMD_MMAPBATCH_V2, privcmd_mmapbatch_v2);
++#endif
++
++	/* XenServer Specific */
++#ifdef IOCTL_EVTCHN_RESTRICT_DOMID
++	decode_struct_input(IOCTL_EVTCHN_RESTRICT_DOMID, evtchn_restrict_domid);
++#endif
++#ifdef IOCTL_PRIVCMD_HVMOP
++	decode_struct_output(IOCTL_PRIVCMD_HVMOP, privcmd_hvmop);
++#endif
++#ifdef IOCTL_PRIVCMD_RESTRICT_DOMID
++	decode_struct_input(IOCTL_PRIVCMD_RESTRICT_DOMID, privcmd_restrict_domid);
++#endif
++#ifdef IOCTL_PRIVCMD_SHUTDOWN
++	decode_struct_input(IOCTL_PRIVCMD_SHUTDOWN, sched_remote_shutdown);
++#endif
++#ifdef IOCTL_PRIVCMD_MEMOP
++	decode_struct(IOCTL_PRIVCMD_MEMOP, privcmd_memop, privcmd_memop);
++#endif
++#ifdef IOCTL_PRIVCMD_DOMCTL
++	decode_struct(IOCTL_PRIVCMD_DOMCTL, xen_domctl, xen_domctl);
++#endif
++	}
+ 	return 0;
+ }
+ 
+diff --git a/mk/Makefile b/mk/Makefile
+index 4a853e6..0fc81c8 100644
+--- a/mk/Makefile
++++ b/mk/Makefile
+@@ -1,5 +1,5 @@
+ REPONAME := strace
+-MOCKRPMBUILD := yes
++#MOCKRPMBUILD := yes
+ include $(B_BASE)/common.mk
+ include $(B_BASE)/rpmbuild.mk
+ RPMBUILD_BIN := mockrpmbuild
+diff --git a/structures.h b/structures.h
+new file mode 100644
+index 0000000..b22da3b
+--- /dev/null
++++ b/structures.h
+@@ -0,0 +1,669 @@
++/*
++ * Base types
++ */
++DEFINE_BASE_TYPE(int, int, "%d");
++DEFINE_BASE_TYPE(uint, unsigned int, "%u");
++DEFINE_BASE_TYPE(ulong, unsigned long, "%lu");
++DEFINE_BASE_TYPE(domid, domid_t, "%u");
++DEFINE_BASE_TYPE(u8,  uint8_t,  "%u");
++DEFINE_BASE_TYPE(u16, uint16_t, "%u");
++DEFINE_BASE_TYPE(u32, uint32_t, "%u");
++DEFINE_BASE_TYPE(u64, __u64, "%" PRIu64);
++DEFINE_BASE_TYPE(p64, __u64, "%#" PRIx64);	// TODO for now just print
++/* typedef long unsigned int, xen_pfn_t; */
++DEFINE_BASE_TYPE(xen_pfn_t, unsigned long, "%lu");
++
++
++/*
++ * Event channels
++ */
++#define STRUCT struct ioctl_evtchn_bind_virq
++START_STRUCT(evtchn_bind_virq)
++	BASE_ITEM(uint, virq)
++END_STRUCT(evtchn_bind_virq)
++#undef STRUCT
++
++#define STRUCT struct ioctl_evtchn_bind_interdomain
++START_STRUCT(evtchn_bind_interdomain)
++	BASE_ITEM(uint, remote_domain)
++	BASE_ITEM(uint, remote_port)
++END_STRUCT(evtchn_bind_interdomain)
++#undef STRUCT
++
++#define STRUCT struct ioctl_evtchn_bind_unbound_port
++START_STRUCT(evtchn_bind_unbound_port)
++	BASE_ITEM(uint, remote_domain)
++END_STRUCT(evtchn_bind_unbound_port)
++#undef STRUCT
++
++#define STRUCT struct ioctl_evtchn_unbind
++START_STRUCT(evtchn_unbind)
++	BASE_ITEM(uint, port)
++END_STRUCT(evtchn_unbind)
++#undef STRUCT
++
++#define STRUCT struct ioctl_evtchn_notify
++START_STRUCT(evtchn_notify)
++	BASE_ITEM(uint, port)
++END_STRUCT(evtchn_notify)
++#undef STRUCT
++
++#ifdef IOCTL_EVTCHN_RESTRICT_DOMID
++#define STRUCT struct ioctl_evtchn_restrict_domid
++START_STRUCT(evtchn_restrict_domid)
++	BASE_ITEM(domid, domid)
++END_STRUCT(evtchn_restrict_domid)
++#undef STRUCT
++#endif
++
++
++/*
++ * privcmd
++ */
++#define STRUCT privcmd_hypercall_t
++FIXED_ARRAY(privcmd_hypercall_args, arg, u64)
++
++START_STRUCT(privcmd_hypercall)
++	BASE_ITEM(u64, op)
++	BASE_ITEM(privcmd_hypercall_args, arg)
++END_STRUCT(privcmd_hypercall)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_set_pci_intx_level
++START_STRUCT(xen_hvm_set_pci_intx_level)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u8, domain)
++	BASE_ITEM(u8, bus)
++	BASE_ITEM(u8, device)
++	BASE_ITEM(u8, intx)
++	BASE_ITEM(u8, level)
++END_STRUCT(xen_hvm_set_pci_intx_level)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_set_isa_irq_level
++START_STRUCT(xen_hvm_set_isa_irq_level)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u8, isa_irq)
++	BASE_ITEM(u8, level)
++END_STRUCT(xen_hvm_set_isa_irq_level)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_set_pci_link_route
++START_STRUCT(xen_hvm_set_pci_link_route)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u8, link)
++	BASE_ITEM(u8, isa_irq)
++END_STRUCT(xen_hvm_set_pci_link_route)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_param
++START_STRUCT(xen_hvm_param)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u32, index)
++	BASE_ITEM(u64, value)
++END_STRUCT(xen_hvm_param)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_modified_memory
++START_STRUCT(xen_hvm_modified_memory)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u64, first_pfn)
++	BASE_ITEM(u64, nr)
++END_STRUCT(xen_hvm_modified_memory)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_set_mem_type
++START_STRUCT(xen_hvm_set_mem_type)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u16, hvmmem_type)
++	BASE_ITEM(u32, nr)
++	BASE_ITEM(u64, first_pfn)
++END_STRUCT(xen_hvm_set_mem_type)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_pagetable_dying
++FIXED_ARRAY(xen_hvm_pagetable_dying_pads, pad, u16)
++
++START_STRUCT(xen_hvm_pagetable_dying)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(xen_hvm_pagetable_dying_pads, pad)
++	BASE_ITEM(u64, gpa)
++END_STRUCT(xen_hvm_pagetable_dying)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_get_time
++START_STRUCT(xen_hvm_get_time)
++	BASE_ITEM(u64, now)
++END_STRUCT(xen_hvm_get_time)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_set_mem_access
++START_STRUCT(xen_hvm_set_mem_access)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u16, hvmmem_access)
++	BASE_ITEM(u32, nr)
++	BASE_ITEM(u64, first_pfn)
++END_STRUCT(xen_hvm_set_mem_access)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_get_mem_access
++START_STRUCT(xen_hvm_get_mem_access)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u16, hvmmem_access)
++	BASE_ITEM(u64, pfn)
++END_STRUCT(xen_hvm_get_mem_access)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_inject_trap
++START_STRUCT(xen_hvm_inject_trap)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u32, vcpuid)
++	BASE_ITEM(u32, error_code)
++	BASE_ITEM(u64, cr2)
++END_STRUCT(xen_hvm_inject_trap)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_get_mem_type
++FIXED_ARRAY(xen_hvm_get_mem_type_pads, pad, u16)
++
++START_STRUCT(xen_hvm_get_mem_type)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(u16, mem_type)
++	BASE_ITEM(xen_hvm_get_mem_type_pads, pad)
++	BASE_ITEM(u64, pfn)
++END_STRUCT(xen_hvm_get_mem_type)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_set_driver_version
++START_STRUCT(xen_hvm_set_driver_version)
++	BASE_ITEM(u32, build)
++END_STRUCT(xen_hvm_set_driver_version)
++#undef STRUCT
++
++#define STRUCT struct xen_hvm_xentrace
++FIXED_ARRAY(xen_hvm_xentrace_extras, extra, u8)
++
++START_STRUCT(xen_hvm_xentrace)
++	BASE_ITEM(u16, event)
++	BASE_ITEM(u16, extra_bytes)
++	BASE_ITEM(xen_hvm_xentrace_extras, extra)
++END_STRUCT(xen_hvm_xentrace)
++#undef STRUCT
++
++#ifdef IOCTL_PRIVCMD_SHUTDOWN
++#define STRUCT struct sched_remote_shutdown
++START_STRUCT(sched_remote_shutdown)
++	BASE_ITEM(domid, domain_id)
++	BASE_ITEM(uint, reason)
++END_STRUCT(sched_remote_shutdown)
++#undef STRUCT
++#endif
++
++#ifdef IOCTL_PRIVCMD_RESTRICT_DOMID
++#define STRUCT struct privcmd_restrict_domid
++START_STRUCT(privcmd_restrict_domid)
++	BASE_ITEM(domid, domid)
++END_STRUCT(privcmd_restrict_domid)
++#undef STRUCT
++#endif
++
++#define STRUCT struct privcmd_mmap_entry
++START_STRUCT(privcmd_mmap_entry)
++	BASE_ITEM(u64, va)
++	BASE_ITEM(u64, mfn)
++	BASE_ITEM(u64, npages)
++END_STRUCT(privcmd_mmap_entry)
++#undef STRUCT
++
++#define STRUCT struct privcmd_mmap
++PTR_ARRAY(privcmd_mmap_entries, entry, privcmd_mmap_entry, num)
++
++START_STRUCT(privcmd_mmap)
++	BASE_ITEM(int, num)
++	BASE_ITEM(domid, dom)
++	BASE_ITEM(privcmd_mmap_entries, entry)
++END_STRUCT(privcmd_mmap)
++#undef STRUCT
++
++#define STRUCT struct privcmd_mmapbatch
++static const type_ulong_array type_privcmd_mmapbatch_arr = {
++	{ print_ulong_array, sizeof(void*) },
++	sizeof(((struct privcmd_mmapbatch*)0)->num),
++	offsetof(struct privcmd_mmapbatch, num) - offsetof(struct privcmd_mmapbatch, arr)
++};
++START_STRUCT(privcmd_mmapbatch)
++	BASE_ITEM(int, num)
++	BASE_ITEM(domid, dom)
++	BASE_ITEM(p64, addr)
++	BASE_ITEM(privcmd_mmapbatch_arr, arr)
++END_STRUCT(privcmd_mmapbatch)
++#undef STRUCT
++
++#define STRUCT struct privcmd_mmapbatch_v2
++static const type_ulong_array type_privcmd_mmapbatch_v2_arr = {
++	{ print_ulong_array, sizeof(void*) },
++	sizeof(((struct privcmd_mmapbatch_v2*)0)->num),
++	offsetof(struct privcmd_mmapbatch_v2, num) - offsetof(struct privcmd_mmapbatch_v2, arr)
++};
++PTR_ARRAY(privcmd_mmapbatch_v2_err, err, int, num)
++
++START_STRUCT(privcmd_mmapbatch_v2)
++	BASE_ITEM(uint, num)
++	BASE_ITEM(domid, dom)
++	BASE_ITEM(p64, addr)
++	BASE_ITEM(privcmd_mmapbatch_v2_arr, arr)
++	BASE_ITEM(privcmd_mmapbatch_v2_err, err)
++END_STRUCT(privcmd_mmapbatch_v2)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_createdomain
++START_STRUCT(xen_domctl_createdomain)
++	BASE_ITEM(u32, ssidref)
++	BASE_ITEM(guid, handle)
++	BASE_ITEM(u32, flags)
++END_STRUCT(xen_domctl_createdomain)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_getdomaininfo
++START_STRUCT(xen_domctl_getdomaininfo)
++	BASE_ITEM(domid, domain)
++	BASE_ITEM(u32, flags)
++	BASE_ITEM(u64, tot_pages)
++	BASE_ITEM(u64, max_pages)
++	BASE_ITEM(u64, outstanding_pages)
++	BASE_ITEM(u64, shr_pages)
++	BASE_ITEM(u64, paged_pages)
++	BASE_ITEM(u64, shared_info_frame)
++	BASE_ITEM(u64, cpu_time)
++	BASE_ITEM(u32, nr_online_vcpus)
++	BASE_ITEM(u32, max_vcpu_id)
++	BASE_ITEM(u32, ssidref)
++	BASE_ITEM(guid, handle)
++	BASE_ITEM(u32, cpupool)
++END_STRUCT(xen_domctl_getdomaininfo)
++#undef STRUCT
++
++#define STRUCT struct xenctl_bitmap
++START_STRUCT(xenctl_bitmap)
++	BASE_ITEM(p64, bitmap)
++	BASE_ITEM(u32, nr_bits)
++END_STRUCT(xenctl_bitmap)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_vcpuaffinity
++START_STRUCT(xen_domctl_vcpuaffinity)
++	BASE_ITEM(u32, vcpu)
++	BASE_ITEM(xenctl_bitmap, cpumap)
++END_STRUCT(xen_domctl_vcpuaffinity)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_max_mem
++START_STRUCT(xen_domctl_max_mem)
++	BASE_ITEM(u64, max_memkb)
++END_STRUCT(xen_domctl_max_mem)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_vcpucontext
++START_STRUCT(xen_domctl_vcpucontext)
++	BASE_ITEM(u32, vcpu)
++	BASE_ITEM(p64, ctxt)
++END_STRUCT(xen_domctl_vcpucontext)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_max_vcpus
++START_STRUCT(xen_domctl_max_vcpus)
++	BASE_ITEM(u32, max)
++END_STRUCT(xen_domctl_max_vcpus)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_setdomainhandle
++START_STRUCT(xen_domctl_setdomainhandle)
++	BASE_ITEM(guid, handle)
++END_STRUCT(xen_domctl_setdomainhandle)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_setdebugging
++START_STRUCT(xen_domctl_setdebugging)
++	BASE_ITEM(u8, enable)
++END_STRUCT(xen_domctl_setdebugging)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_irq_permission
++START_STRUCT(xen_domctl_irq_permission)
++	BASE_ITEM(u8, pirq)
++	BASE_ITEM(u8, allow_access)
++END_STRUCT(xen_domctl_irq_permission)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_iomem_permission
++START_STRUCT(xen_domctl_iomem_permission)
++	BASE_ITEM(u64, first_mfn)
++	BASE_ITEM(u64, nr_mfns)
++	BASE_ITEM(u8, allow_access)
++END_STRUCT(xen_domctl_iomem_permission)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_ioport_permission
++START_STRUCT(xen_domctl_ioport_permission)
++	BASE_ITEM(u32, first_port)
++	BASE_ITEM(u32, nr_ports)
++	BASE_ITEM(u8, allow_access)
++END_STRUCT(xen_domctl_ioport_permission)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_hypercall_init
++START_STRUCT(xen_domctl_hypercall_init)
++	BASE_ITEM(u64, gmfn)
++END_STRUCT(xen_domctl_hypercall_init)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_settimeoffset
++START_STRUCT(xen_domctl_settimeoffset)
++	BASE_ITEM(int, time_offset_seconds)
++END_STRUCT(xen_domctl_settimeoffset)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_sendtrigger
++START_STRUCT(xen_domctl_sendtrigger)
++	BASE_ITEM(u32, trigger)
++	BASE_ITEM(u32, vcpu)
++END_STRUCT(xen_domctl_sendtrigger)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_subscribe
++START_STRUCT(xen_domctl_subscribe)
++	BASE_ITEM(u32, port)
++END_STRUCT(xen_domctl_subscribe)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_hvmcontext
++START_STRUCT(xen_domctl_hvmcontext)
++	BASE_ITEM(u32, size)
++	BASE_ITEM(p64, buffer)
++END_STRUCT(xen_domctl_hvmcontext)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_address_size
++START_STRUCT(xen_domctl_address_size)
++	BASE_ITEM(u32, size)
++END_STRUCT(xen_domctl_address_size)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_assign_device
++START_STRUCT(xen_domctl_assign_device)
++	BASE_ITEM(u32, machine_sbdf)
++END_STRUCT(xen_domctl_assign_device)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_memory_mapping
++START_STRUCT(xen_domctl_memory_mapping)
++	BASE_ITEM(u64, first_gfn)
++	BASE_ITEM(u64, first_mfn)
++	BASE_ITEM(u64, nr_mfns)
++	BASE_ITEM(u32, add_mapping)
++	BASE_ITEM(u32, padding)
++END_STRUCT(xen_domctl_memory_mapping)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_ioport_mapping
++START_STRUCT(xen_domctl_ioport_mapping)
++	BASE_ITEM(u32, first_gport)
++	BASE_ITEM(u32, first_mport)
++	BASE_ITEM(u32, nr_ports)
++	BASE_ITEM(u32, add_mapping)
++END_STRUCT(xen_domctl_ioport_mapping)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_pin_mem_cacheattr
++START_STRUCT(xen_domctl_pin_mem_cacheattr)
++	BASE_ITEM(u64, start)
++	BASE_ITEM(u64, end)
++	BASE_ITEM(u32, type)
++END_STRUCT(xen_domctl_pin_mem_cacheattr)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_ext_vcpucontext
++START_STRUCT(xen_domctl_ext_vcpucontext)
++	BASE_ITEM(u32, vcpu)
++	BASE_ITEM(u32, size)
++	BASE_ITEM(u64, syscall32_callback_eip)
++	BASE_ITEM(u64, sysenter_callback_eip)
++	BASE_ITEM(u16, syscall32_callback_cs)
++	BASE_ITEM(u16, sysenter_callback_cs)
++	BASE_ITEM(u8, syscall32_disables_events)
++	BASE_ITEM(u8, sysenter_disables_events)
++END_STRUCT(xen_domctl_ext_vcpucontext)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_set_target
++START_STRUCT(xen_domctl_set_target)
++	BASE_ITEM(domid, target)
++END_STRUCT(xen_domctl_set_target)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_cpuid
++FIXED_ARRAY(xen_domctl_cpuid_inputs, input, u32)
++
++START_STRUCT(xen_domctl_cpuid)
++	BASE_ITEM(xen_domctl_cpuid_inputs, input)
++	BASE_ITEM(u32, eax)
++	BASE_ITEM(u32, ebx)
++	BASE_ITEM(u32, ecx)
++	BASE_ITEM(u32, edx)
++END_STRUCT(xen_domctl_cpuid)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_debug_op
++START_STRUCT(xen_domctl_debug_op)
++	BASE_ITEM(u32, op)
++	BASE_ITEM(u32, vcpu)
++END_STRUCT(xen_domctl_debug_op)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_mem_event_op
++START_STRUCT(xen_domctl_mem_event_op)
++	BASE_ITEM(u32, op)
++	BASE_ITEM(u32, mode)
++	BASE_ITEM(u32, port)
++END_STRUCT(xen_domctl_mem_event_op)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_disable_migrate
++START_STRUCT(xen_domctl_disable_migrate)
++	BASE_ITEM(u32, disable)
++END_STRUCT(xen_domctl_disable_migrate)
++#undef STRUCT
++
++#define STRUCT struct xen_guest_tsc_info
++START_STRUCT(xen_guest_tsc_info)
++	BASE_ITEM(u32, tsc_mode)
++	BASE_ITEM(u32, gtsc_khz)
++	BASE_ITEM(u32, incarnation)
++	BASE_ITEM(u32, pad)
++	BASE_ITEM(u64, elapsed_nsec)
++END_STRUCT(xen_guest_tsc_info)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_tsc_info
++START_STRUCT(xen_domctl_tsc_info)
++	BASE_ITEM(p64, out_info)
++	BASE_ITEM(xen_guest_tsc_info, info)
++END_STRUCT(xen_domctl_tsc_info)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_vcpuextstate
++START_STRUCT(xen_domctl_vcpuextstate)
++	BASE_ITEM(u32, vcpu)
++	BASE_ITEM(u64, xfeature_mask)
++	BASE_ITEM(u64, size)
++	BASE_ITEM(p64, buffer)
++END_STRUCT(xen_domctl_vcpuextstate)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_set_access_required
++START_STRUCT(xen_domctl_set_access_required)
++	BASE_ITEM(u8, access_required)
++END_STRUCT(xen_domctl_set_access_required)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_corespersocket
++START_STRUCT(xen_domctl_corespersocket)
++	BASE_ITEM(u32, cores_per_socket)
++END_STRUCT(xen_domctl_corespersocket)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_gdbsx_pauseunp_vcpu
++START_STRUCT(xen_domctl_gdbsx_pauseunp_vcpu)
++	BASE_ITEM(u32, vcpu)
++END_STRUCT(xen_domctl_gdbsx_pauseunp_vcpu)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_gdbsx_domstatus
++START_STRUCT(xen_domctl_gdbsx_domstatus)
++	BASE_ITEM(u8, paused)
++	BASE_ITEM(u32, vcpu_id)
++	BASE_ITEM(u32, vcpu_ev)
++END_STRUCT(xen_domctl_gdbsx_domstatus)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_runstate_info
++FIXED_ARRAY(xen_domctl_runstate_info_times, time, u64)
++
++START_STRUCT(xen_domctl_runstate_info)
++	BASE_ITEM(u32, state)
++	BASE_ITEM(u32, missed_changes)
++	BASE_ITEM(u64, state_entry_time)
++	BASE_ITEM(xen_domctl_runstate_info_times, time)
++END_STRUCT(xen_domctl_runstate_info)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_gdbsx_memio
++START_STRUCT(xen_domctl_gdbsx_memio)
++	BASE_ITEM(u64, pgd3val)
++	BASE_ITEM(u64, gva)
++	BASE_ITEM(u64, uva)
++	BASE_ITEM(u32, len)
++	BASE_ITEM(u8, gwr)
++	BASE_ITEM(u32, remain)
++END_STRUCT(xen_domctl_gdbsx_memio)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_getmemlist
++START_STRUCT(xen_domctl_getmemlist)
++	BASE_ITEM(u64, max_pfns)
++	BASE_ITEM(u64, start_pfn)
++	BASE_ITEM(p64, buffer)
++	BASE_ITEM(u64, num_pfns)
++END_STRUCT(xen_domctl_getmemlist)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_getpageframeinfo
++START_STRUCT(xen_domctl_getpageframeinfo)
++	BASE_ITEM(u64, gmfn)
++	BASE_ITEM(u32, type)
++END_STRUCT(xen_domctl_getpageframeinfo)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_getpageframeinfo2
++START_STRUCT(xen_domctl_getpageframeinfo2)
++	BASE_ITEM(u64, num)
++	BASE_ITEM(p64, array)
++END_STRUCT(xen_domctl_getpageframeinfo2)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_getvcpuinfo
++START_STRUCT(xen_domctl_getvcpuinfo)
++	BASE_ITEM(u32, vcpu)
++	BASE_ITEM(u8, online)
++	BASE_ITEM(u8, blocked)
++	BASE_ITEM(u8, running)
++	BASE_ITEM(u64, cpu_time)
++	BASE_ITEM(u32, cpu)
++END_STRUCT(xen_domctl_getvcpuinfo)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_get_device_group
++START_STRUCT(xen_domctl_get_device_group)
++	BASE_ITEM(u32, machine_sbdf)
++	BASE_ITEM(u32, max_sdevs)
++	BASE_ITEM(u32, num_sdevs)
++	BASE_ITEM(p64, sdev_array)
++END_STRUCT(xen_domctl_get_device_group)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_hvmcontext_partial
++START_STRUCT(xen_domctl_hvmcontext_partial)
++	BASE_ITEM(u32, type)
++	BASE_ITEM(u32, instance)
++	BASE_ITEM(p64, buffer)
++END_STRUCT(xen_domctl_hvmcontext_partial)
++#undef STRUCT
++
++#define STRUCT struct xen_domctl_getpageframeinfo3
++START_STRUCT(xen_domctl_getpageframeinfo3)
++	BASE_ITEM(u64, num)
++	BASE_ITEM(p64, array)
++END_STRUCT(xen_domctl_getpageframeinfo3)
++#undef STRUCT
++
++
++/*
++ * Memory operations
++ */
++#define STRUCT struct xen_memory_reservation
++START_STRUCT(xen_memory_reservation)
++	BASE_ITEM(p64, extent_start)	// pointer to xen_pfn_t
++	BASE_ITEM(ulong, nr_extents)
++	BASE_ITEM(uint, extent_order)
++	BASE_ITEM(uint, mem_flags)
++	BASE_ITEM(domid, domid)
++END_STRUCT(xen_memory_reservation)
++#undef STRUCT
++
++#define STRUCT struct xen_memory_exchange
++START_STRUCT(xen_memory_exchange)
++	BASE_ITEM(xen_memory_reservation, in)
++	BASE_ITEM(xen_memory_reservation, out)
++	BASE_ITEM(ulong, nr_exchanged)
++END_STRUCT(xen_memory_exchange)
++#undef STRUCT
++
++#define STRUCT struct xen_add_to_physmap
++START_STRUCT(xen_add_to_physmap)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(uint, space)
++	BASE_ITEM(ulong, idx)
++	BASE_ITEM(xen_pfn_t, gpfn)
++END_STRUCT(xen_add_to_physmap)
++#undef STRUCT
++
++#define STRUCT struct xen_memory_map
++START_STRUCT(xen_memory_map)
++	BASE_ITEM(uint, nr_entries)
++	BASE_ITEM(p64, buffer)	// pointer to void
++END_STRUCT(xen_memory_map)
++#undef STRUCT
++
++#define STRUCT struct xen_foreign_memory_map
++START_STRUCT(xen_foreign_memory_map)
++	BASE_ITEM(domid, domid)
++	BASE_ITEM(xen_memory_map, map)
++END_STRUCT(xen_foreign_memory_map)
++#undef STRUCT
++
++#define STRUCT struct xen_machphys_mfn_list
++START_STRUCT(xen_machphys_mfn_list)
++	BASE_ITEM(uint, max_extents)
++	BASE_ITEM(p64, extent_start)	// pointer to xen_pfn_t
++	BASE_ITEM(uint, nr_extents)
++END_STRUCT(xen_machphys_mfn_list)
++#undef STRUCT
++
++#define STRUCT struct xen_machphys_mapping
++START_STRUCT(xen_machphys_mapping)
++	BASE_ITEM(ulong, v_start)
++	BASE_ITEM(ulong, v_end)
++	BASE_ITEM(ulong, max_mfn)
++END_STRUCT(xen_machphys_mapping)
++#undef STRUCT
++

@@ -1,0 +1,122 @@
+Base testing for full iop ioctl
+
+From: Frediano Ziglio <frediano.ziglio@citrix.com>
+
+Test that on invalid ioctl a "not handled" is returned.
+
+Signed-off-by: Frediano Ziglio <frediano.ziglio@citrix.com>
+
+diff --git a/.gitignore b/.gitignore
+index 2c1e8d8..09466f4 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -34,6 +34,7 @@ Makefile.in
+ /ioctlsort
+ /strace
+ /test-driver
++/exact_test
+ 
+ /linux/ioctlent.h
+ 
+diff --git a/Makefile.am b/Makefile.am
+index 963466a..b688633 100644
+--- a/Makefile.am
++++ b/Makefile.am
+@@ -6,6 +6,12 @@ bin_PROGRAMS = strace
+ man_MANS = strace.1
+ bin_SCRIPTS = strace-graph strace-log-merge
+ 
++TESTS = exact_test
++
++noinst_PROGRAMS = exact_test
++exact_test_SOURCES = ioctlexact.c exact_test.c mock_defs.h
++exact_test_CPPFLAGS = -DEXACT_TESTING
++
+ OS		= linux
+ # ARCH is `i386', `m68k', `sparc', etc.
+ ARCH		= @arch@
+diff --git a/exact_test.c b/exact_test.c
+new file mode 100644
+index 0000000..6b06e70
+--- /dev/null
++++ b/exact_test.c
+@@ -0,0 +1,45 @@
++/*
++ * Copyright (c) 2014 Citrix.
++ * Written by Frediano Ziglio <frediano.ziglio@citrix.com>.
++ *
++ * Redistribution and use in source and binary forms, with or without
++ * modification, are permitted provided that the following conditions
++ * are met:
++ * 1. Redistributions of source code must retain the above copyright
++ *    notice, this list of conditions and the following disclaimer.
++ * 2. Redistributions in binary form must reproduce the above copyright
++ *    notice, this list of conditions and the following disclaimer in the
++ *    documentation and/or other materials provided with the distribution.
++ * 3. The name of the author may not be used to endorse or promote products
++ *    derived from this software without specific prior written permission.
++ *
++ * THIS SOFTWARE IS PROVIDED BY THE AUTHOR ``AS IS'' AND ANY EXPRESS OR
++ * IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
++ * OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
++ * IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DIRECT, INDIRECT,
++ * INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT
++ * NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
++ * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
++ * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
++ * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF
++ * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
++ */
++
++/*
++ * Test program to test Xen ioctls
++ */
++#undef NDEBUG
++#include "mock_defs.h"
++#include <assert.h>
++
++static struct tcb g_tcb;
++
++int main(void)
++{
++	/* assert a not handled is returned for invalid IOCTL */
++	g_tcb.u_arg[1] = 1;
++	g_tcb.u_arg[2] = 0;
++	assert(ioctl_decode_exact(&g_tcb) == 0);
++	return 0;
++}
++
+diff --git a/ioctlexact.c b/ioctlexact.c
+index 9a9ca7d..7d11b12 100644
+--- a/ioctlexact.c
++++ b/ioctlexact.c
+@@ -25,7 +25,11 @@
+  * THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  */
+ 
+-#include "defs.h"
++#if EXACT_TESTING
++#  include "mock_defs.h"
++#else
++#  include "defs.h"
++#endif
+ 
+ /*
+  * Try to detect and handle the exact ioctl code
+diff --git a/mock_defs.h b/mock_defs.h
+new file mode 100644
+index 0000000..e759790
+--- /dev/null
++++ b/mock_defs.h
+@@ -0,0 +1,11 @@
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <stdint.h>
++#include <inttypes.h>
++
++struct tcb {
++	long u_arg[3];
++};
++
++int ioctl_decode_exact(struct tcb *tcp);

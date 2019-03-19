@@ -1,0 +1,439 @@
+Script to extract structure from dwarf informations
+
+From: Frediano Ziglio <frediano.ziglio@citrix.com>
+
+Currently the program parse objdump output to output C declarations.
+
+Signed-off-by: Frediano Ziglio <frediano.ziglio@citrix.com>
+
+diff --git a/mk/dwarf.pl b/mk/dwarf.pl
+new file mode 100755
+index 0000000..b444b8c
+--- /dev/null
++++ b/mk/dwarf.pl
+@@ -0,0 +1,425 @@
++#! /usr/bin/perl -w
++#
++#  dwarf.pl    extract the good bits from dwarf output
++#
++#  Use as:
++#    objdump --dwarf=info ../object.o | ./dwarf.pl
++#
++
++use strict;
++
++my @variables;
++
++sub parseField($$$)
++{
++	my ($rec, $type, $val) = @_;
++	my $full = "$rec.$type";
++	if ($type eq 'DW_AT_stmt_list') {
++	} elsif ($type eq 'DW_AT_name') {
++		$val =~ s/.*\): //;
++		$val =~ s/.*: //;
++		$val =~ s/\s+$//;
++		return 'name', $val;
++	} elsif ($type eq 'DW_AT_byte_size') {
++		die "$type -$val-" if $val !~ /^(\d+)\s*$/;
++		return 'size', $1;
++	} elsif ($full eq 'DW_TAG_base_type.DW_AT_encoding') {
++		die "$type -$val-" if $val !~ /\(((?:un)?signed(?: char)?)\)/i;
++		return 'encoding', $1;
++	} elsif ($type eq 'DW_AT_decl_file' || $type eq 'DW_AT_decl_line') {
++		# ignore these info for the moment
++	} elsif ($type eq 'DW_AT_type') {
++		die "$type -$val-" if $val !~ /^<0x([0-9a-f]+)>\s*$/i;
++		return 'type', $1;
++	} elsif ($full eq 'DW_TAG_structure_type.DW_AT_sibling' || $full eq 'DW_TAG_array_type.DW_AT_sibling' || $full eq 'DW_TAG_union_type.DW_AT_sibling' || $full eq 'DW_TAG_enumeration_type.DW_AT_sibling') {
++		die "$type -$val-" if $val !~ /^<0x([0-9a-f]+)>\s*$/i;
++		return 'sibling', $1;
++	} elsif ($type eq 'DW_AT_data_member_location') {
++		# strangely this constant is printed decimal
++		return 'offset', $1 if $val =~ /\(DW_OP_plus_uconst: (\d+)\)/;
++		return 'offset', $1 if $val =~ /^(\d+)\s*$/;
++		die "$type -$val-";
++	} elsif ($full eq 'DW_TAG_subrange_type.DW_AT_upper_bound') {
++		die "$type -$val-" if $val !~ /^(\d+)\s*$/;
++		return 'bound', $1;
++	} elsif ($full eq 'DW_TAG_enumerator.DW_AT_const_value') {
++		die "$type -$val-" if $val !~ /^(\d+)\s*$/ || $1 > 10;
++		return 'const_value', $1;
++	} else {
++		die "$type -$val-";
++	}
++}
++
++sub parseRow($) {
++	my @rows = split(/\n\s+/, shift);
++	my $hdr = shift @rows;
++	return undef if $hdr !~ m/^\d><([0-9a-f]+)>.*?\((DW_[^)]+)\)/;
++	my ($hdrOff, $hdrType) = ($1, $2);
++	return undef if grep { $_ eq $hdrType } qw(DW_TAG_compile_unit DW_TAG_subprogram DW_TAG_subroutine_type DW_TAG_formal_parameter DW_TAG_variable DW_TAG_inlined_subroutine DW_TAG_lexical_block);
++#	print "type $hdrOff $hdrType\n";
++	my %attrs;
++	foreach (@rows) {
++		next if $_ eq '<';
++		die "$_" if !/^<([0-9a-f]+)>\s+(DW_[_a-z]+)\s*: (.*)/i;
++		my ($off, $type, $val) = ($1, $2, $3);
++		my ($name, $value) = parseField($hdrType, $type, $val);
++		next if !$name;
++		$attrs{$name} = $value;
++#		print "\t$name $value\n";
++	}
++	my %row = (
++		'offset' => $hdrOff,
++		'type' => $hdrType,
++		'attrs' => \%attrs,
++	);
++	return \%row;
++}
++
++my %allTypes;
++
++sub rowFactory($)
++{
++	my $row = shift;
++	my $res;
++	if ($row->{type} eq 'DW_TAG_structure_type') {
++		$res = DW::structure->new($row);
++	} elsif ($row->{type} eq 'DW_TAG_array_type') {
++		$res = DW::array->new($row);
++	} elsif ($row->{type} eq 'DW_TAG_union_type') {
++		$res = DW::union->new($row);
++	} elsif ($row->{type} eq 'DW_TAG_enumeration_type') {
++		$res = DW::enum->new($row);
++	} elsif ($row->{type} eq 'DW_TAG_base_type') {
++		$res = DW::base_type->new($row);
++	} elsif ($row->{type} eq 'DW_TAG_pointer_type') {
++		$res = DW::pointer->new($row);
++	} elsif ($row->{type} eq 'DW_TAG_typedef') {
++		$res = DW::typedef->new($row);
++	} elsif ($row->{type} eq 'DW_TAG_const_type') {
++		$res = DW::const->new($row);
++	} else {
++		$res = DW::type->new($row);
++	}
++	$allTypes{$res->{offset}} = $res;
++	return $res;
++}
++
++my $leftRow = undef;
++
++sub getRow() {
++	local $/ = "\n <";
++
++	# return previos extracted row
++	my $row = $leftRow;
++	$leftRow = undef;
++	return rowFactory($row) if defined($row);
++
++	while (<>) {
++		my $row = parseRow($_);
++		next if !defined($row);
++		my $type = rowFactory($row);
++		if ($row->{attrs}->{sibling}) {
++			my $sib = hex($row->{attrs}->{sibling});
++			while(1) {
++				$leftRow = &getRow;
++				last if !defined($leftRow) || hex($leftRow->{offset}) >= $sib;
++				$type->addMember($leftRow);
++				$leftRow = undef;
++			}
++		}
++		return $type;
++	}
++	return undef;
++}
++
++my $variable;
++while (my $row = &getRow) {
++}
++
++foreach my $t (values %allTypes) {
++	if ($t->{type} eq 'DW_TAG_structure_type' && $t->{attrs}->{name} eq 'xen_domctl') {
++		$t->mustDeclare;
++	}
++}
++
++
++my $numGenerated;
++sub generateName()
++{
++	++$numGenerated;
++	return sprintf("gentype%08d", $numGenerated);
++}
++
++package DW::type;
++
++sub new {
++	my $proto = shift;
++	my $class = ref ($proto) || $proto;
++
++	my $self = shift;
++	bless $self, $class;
++
++	return $self;
++}
++
++# declaration on its own, on separate statement
++sub getDecl {
++	my $self = shift;
++	die "should be defined $self->{type}";
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++	return $self->getDecl.$name;
++}
++
++sub getType {
++	my ($self, $off) = @_;
++	die if !exists($allTypes{$off});
++	return $allTypes{$off};
++}
++
++sub mustDeclare {
++	my $self = shift;
++	return if $self->{declared};
++	$self->{declared} = 1;
++	print $self->getDecl;
++}
++
++package DW::structure;
++
++use base qw(DW::type);
++
++sub addMember {
++	my ($self, $row) = @_;
++	die "$row->{type}" if ($row->{type} ne 'DW_TAG_member');
++	my %a = %{$row->{attrs}};
++	foreach my $k (keys %a) {
++		die $k if int(grep { $_ eq $k } qw(name type offset)) == 0;
++	}
++#	a field in a structure can have no name (used for instance for union)
++#	die if !exists($a{name});
++	die if !exists($a{type});
++	die if !exists($a{offset});
++	push @{$self->{fields}}, \%a;
++}
++
++# just the fields
++sub getBaseDecl {
++	my $self = shift;
++	my $r = "";
++	my @fields = @{$self->{fields}};
++	foreach my $f (@fields) {
++		my $name = $f->{name};
++		$name = defined($name) ? " $name" : '';
++		my $t = DW::type->getType($f->{type})->getTypeDecl($name);
++		$r .= "$t";
++	}
++	return $r;
++}
++
++sub getDecl {
++	my $self = shift;
++	my $name = $self->{attrs}->{name};
++	$self->{attrs}->{name} = &main::generateName() if !$name;
++	return '' if !$name;
++	my $base = $self->getBaseDecl;
++	return qq!#define STRUCT struct $name
++START_STRUCT($name)
++${base}END_STRUCT($name)
++#undef STRUCT
++
++!;
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++	my $n = $self->{attrs}->{name};
++	$self->{attrs}->{name} = &main::generateName() if !$n;
++	$n = $self->{attrs}->{name};
++	$self->mustDeclare;
++	return "\tBASE_ITEM($n,$name)\n";
++}
++
++package DW::array;
++
++use base qw(DW::type);
++
++sub addMember {
++	my $self = shift;
++	my $row = shift;
++	die "$row->{type}" if ($row->{type} ne 'DW_TAG_subrange_type');
++	my %a = %{$row->{attrs}};
++	foreach my $k (keys %a) {
++		die $k if int(grep { $_ eq $k } qw(bound type)) == 0;
++	}
++	die if !exists($a{type});
++	die if !exists($a{bound});
++	$self->{attrs}->{size} = $a{bound} + 1;
++	$self->{attrs}->{type} = $a{type};
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++	my $n = $self->{attrs}->{size};
++	die if !$n;
++	my $t = DW::type->getType($self->{attrs}->{type})->getTypeDecl($name);
++	return "${t}[$n]";
++}
++
++package DW::union;
++
++use base qw(DW::type);
++
++sub addMember {
++	my $self = shift;
++	my $row = shift;
++	die "$row->{type}" if ($row->{type} ne 'DW_TAG_member');
++	my %a = %{$row->{attrs}};
++	foreach my $k (keys %a) {
++		die $k if int(grep { $_ eq $k } qw(name type)) == 0;
++	}
++	die if !exists($a{name});
++	die if !exists($a{type});
++	push @{$self->{fields}}, \%a;
++}
++
++# just fields
++sub getBaseDecl {
++	my $self = shift;
++	my $r = "";
++	my @fields = @{$self->{fields}};
++	foreach my $f (@fields) {
++		my $name = $f->{name};
++		$name = defined($name) ? " $name" : '';
++		my $t = DW::type->getType($f->{type})->getTypeDecl($name);
++		$t =~ s/^/\t/mg;
++		$r .= "$t";
++	}
++	return $r;
++}
++
++sub getDecl {
++	my $self = shift;
++	my $name = $self->{attrs}->{name};
++	return '' if !$name;
++	$self->mustDeclare;
++	return "union $name ".$self->getBaseDecl.";\n";
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++	my $n = $self->{attrs}->{name};
++	return defined($n) ? "union $n$name" : "union ".$self->getBaseDecl.$name;
++}
++
++package DW::enum;
++
++use base qw(DW::type);
++
++sub getBaseDecl {
++	my $self = shift;
++	my $r = "{\n";
++	my %c = %{$self->{constants}};
++	foreach (sort { $c{$a} <=> $c{$b} } keys %c) {
++		$r .= "\t$_ = $c{$_},\n";
++	}
++	$r .= "}";
++	return $r;
++}
++
++sub getDecl {
++	my $self = shift;
++	my $name = $self->{attrs}->{name};
++	return '' if !$name;
++	return "enum $name ".$self->getBaseDecl.";\n";
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++	my $n = $self->{attrs}->{name};
++	$self->mustDeclare;
++	return defined($n) ? "enum $n$name" : "enum ".$self->getBaseDecl.$name;
++}
++
++sub addMember {
++	my $self = shift;
++	my $row = shift;
++	die "$row->{type}" if ($row->{type} ne 'DW_TAG_enumerator');
++	my %a = %{$row->{attrs}};
++	foreach my $k (keys %a) {
++		die $k if int(grep { $_ eq $k } qw(const_value name)) == 0;
++	}
++	die if !exists($a{const_value});
++	die if !exists($a{name});
++	$self->{constants}->{$a{name}} = $a{const_value};
++}
++
++package DW::base_type;
++
++use base qw(DW::type);
++
++sub getDecl {
++	die;
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++	my $n = $self->{attrs}->{name};
++	die if !$n;
++	return "\tBASE_ITEM($n,$name)\n";
++}
++
++package DW::pointer;
++
++use base qw(DW::type);
++
++sub getDecl {
++	die;
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++# TODO correct for arrays ??
++	my $t = $self->{attrs}->{type} ? DW::type->getType($self->{attrs}->{type})->getTypeDecl(''): 'void';
++	return "$t *$name";
++}
++
++package DW::const;
++
++use base qw(DW::type);
++
++sub getDecl {
++	die;
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++# TODO correct for arrays ??
++	my $t = $self->{attrs}->{type} ? DW::type->getType($self->{attrs}->{type})->getTypeDecl(''): 'void';
++	return "$t const$name";
++}
++
++package DW::typedef;
++
++use base qw(DW::type);
++
++sub getDecl {
++	my $self = shift;
++	my $n = $self->{attrs}->{name};
++	$self->{attrs}->{name} = &main::generateName() if !$n;
++	$n = $self->{attrs}->{name};
++	my $t = $self->{attrs}->{type} ? DW::type->getType($self->{attrs}->{type})->getTypeDecl(" $n"): "void $n";
++	return "/*\ntypedef $t;\n*/\n";
++}
++
++sub getTypeDecl {
++	my ($self, $name) = @_;
++	my $n = $self->{attrs}->{name};
++	$self->{attrs}->{name} = &main::generateName() if !$n;
++	$n = $self->{attrs}->{name};
++	$self->mustDeclare;
++	return "\tBASE_ITEM($n,$name)\n";
++}
++
++1;

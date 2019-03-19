@@ -1,0 +1,153 @@
+diff --git a/ioctlexact.c b/ioctlexact.c
+index 3a9aacc..09ee685 100644
+--- a/ioctlexact.c
++++ b/ioctlexact.c
+@@ -171,8 +171,12 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL_NOARG(unpausedomain)
+ 	XEN_DOMCTL_OUT(getdomaininfo, xen_domctl_getdomaininfo, getdomaininfo)	// output
+ 	XEN_DOMCTL_OUT(getmemlist, xen_domctl_getmemlist, getmemlist)		// output, max_pfns input
++#ifdef XEN_DOMCTL_getpageframeinfo
+ 	XEN_DOMCTL_OUT(getpageframeinfo, xen_domctl_getpageframeinfo, getpageframeinfo)	// output, gmfn in
++#endif
++#ifdef XEN_DOMCTL_getpageframeinfo2
+ 	XEN_DOMCTL_OUT(getpageframeinfo2, xen_domctl_getpageframeinfo2, getpageframeinfo2)	// num, array input, array output
++#endif
+ 	XEN_DOMCTL(setvcpuaffinity, xen_domctl_vcpuaffinity, vcpuaffinity)	// input
+ //	XEN_DOMCTL(shadow_op, xen_domctl_shadow_op, shadow_op)	// input/output ??
+ 	XEN_DOMCTL(max_mem, xen_domctl_max_mem, max_mem)	// input, (set mem)
+@@ -219,7 +223,12 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL_NOARG(suppress_spurious_page_faults)
+ 	XEN_DOMCTL(debug_op, xen_domctl_debug_op, debug_op)	// input
+ 	XEN_DOMCTL_OUT(gethvmcontext_partial, xen_domctl_hvmcontext_partial, hvmcontext_partial)	// output, type, instance input
++#ifdef XEN_DOMCTL_MEM_EVENT_OP_SHARING
+ 	XEN_DOMCTL(mem_event_op, xen_domctl_mem_event_op, mem_event_op)	// input
++#endif
++#ifdef XEN_DOMCTL_VM_EVENT_OP_SHARING
++	XEN_DOMCTL(vm_event_op, xen_domctl_vm_event_op, vm_event_op)	// input
++#endif
+ //	XEN_DOMCTL(mem_sharing_op, xen_domctl_mem_sharing_op, mem_sharing_op)	// depends
+ 	XEN_DOMCTL(disable_migrate, xen_domctl_disable_migrate, disable_migrate)	// input
+ 	XEN_DOMCTL_OUT(gettscinfo, xen_domctl_tsc_info, tsc_info)	// output
+@@ -272,8 +281,12 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL_NOARG(unpausedomain)
+ 	XEN_DOMCTL_OUT(getdomaininfo, xen_domctl_getdomaininfo, getdomaininfo)	// output
+ 	XEN_DOMCTL_OUT(getmemlist, xen_domctl_getmemlist, getmemlist)		// output, max_pfns input
++#ifdef XEN_DOMCTL_getpageframeinfo
+ 	XEN_DOMCTL_OUT(getpageframeinfo, xen_domctl_getpageframeinfo, getpageframeinfo)	// output, gmfn in
++#endif
++#ifdef XEN_DOMCTL_getpageframeinfo2
+ 	XEN_DOMCTL_OUT(getpageframeinfo2, xen_domctl_getpageframeinfo2, getpageframeinfo2)	// num, array input, array output
++#endif
+ 	XEN_DOMCTL(setvcpuaffinity, xen_domctl_vcpuaffinity, vcpuaffinity)	// input
+ //	XEN_DOMCTL(shadow_op, xen_domctl_shadow_op, shadow_op)	// input/output ??
+ 	XEN_DOMCTL(max_mem, xen_domctl_max_mem, max_mem)	// input, (set mem)
+@@ -320,7 +333,12 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL_NOARG(suppress_spurious_page_faults)
+ 	XEN_DOMCTL(debug_op, xen_domctl_debug_op, debug_op)	// input
+ 	XEN_DOMCTL_OUT(gethvmcontext_partial, xen_domctl_hvmcontext_partial, hvmcontext_partial)	// output, type, instance input
++#ifdef XEN_DOMCTL_MEM_EVENT_OP_SHARING
+ 	XEN_DOMCTL(mem_event_op, xen_domctl_mem_event_op, mem_event_op)	// input
++#endif
++#ifdef XEN_DOMCTL_VM_EVENT_OP_SHARING
++	XEN_DOMCTL(vm_event_op, xen_domctl_vm_event_op, vm_event_op)	// input
++#endif
+ //	XEN_DOMCTL(mem_sharing_op, xen_domctl_mem_sharing_op, mem_sharing_op)	// depends
+ 	XEN_DOMCTL(disable_migrate, xen_domctl_disable_migrate, disable_migrate)	// input
+ 	XEN_DOMCTL_OUT(gettscinfo, xen_domctl_tsc_info, tsc_info)	// output
+diff --git a/structures.h b/structures.h
+index 473c6e4..a9d8dab 100644
+--- a/structures.h
++++ b/structures.h
+@@ -409,7 +409,14 @@ END_STRUCT(xen_domctl_address_size)
+ 
+ #define STRUCT struct xen_domctl_assign_device
+ START_STRUCT(xen_domctl_assign_device)
++#ifndef XEN_DOMCTL_DEV_DT
++/* Xen 4.5 and older.  Just a single sbdf */
+ 	BASE_ITEM(u32, machine_sbdf)
++#else
++/* Xen 4.6 and newer.  Split for ARM */
++        BASE_ITEM(u32, dev)
++/* TODO: how to represent the union? */
++#endif
+ END_STRUCT(xen_domctl_assign_device)
+ #undef STRUCT
+ 
+@@ -478,6 +485,7 @@ START_STRUCT(xen_domctl_debug_op)
+ END_STRUCT(xen_domctl_debug_op)
+ #undef STRUCT
+ 
++#ifdef XEN_DOMCTL_MEM_EVENT_OP_SHARING
+ #define STRUCT struct xen_domctl_mem_event_op
+ START_STRUCT(xen_domctl_mem_event_op)
+ 	BASE_ITEM(u32, op)
+@@ -485,6 +493,17 @@ START_STRUCT(xen_domctl_mem_event_op)
+ 	BASE_ITEM(u32, port)
+ END_STRUCT(xen_domctl_mem_event_op)
+ #undef STRUCT
++#endif
++
++#ifdef XEN_DOMCTL_VM_EVENT_OP_SHARING
++#define STRUCT struct xen_domctl_vm_event_op
++START_STRUCT(xen_domctl_vm_event_op)
++	BASE_ITEM(u32, op)
++	BASE_ITEM(u32, mode)
++	BASE_ITEM(u32, port)
++END_STRUCT(xen_domctl_vm_event_op)
++#undef STRUCT
++#endif
+ 
+ #define STRUCT struct xen_domctl_disable_migrate
+ START_STRUCT(xen_domctl_disable_migrate)
+@@ -492,6 +511,7 @@ START_STRUCT(xen_domctl_disable_migrate)
+ END_STRUCT(xen_domctl_disable_migrate)
+ #undef STRUCT
+ 
++#if XEN_DOMCTL_INTERFACE_VERSION < 0x0000000B
+ #define STRUCT struct xen_guest_tsc_info
+ START_STRUCT(xen_guest_tsc_info)
+ 	BASE_ITEM(u32, tsc_mode)
+@@ -509,6 +529,19 @@ START_STRUCT(xen_domctl_tsc_info)
+ END_STRUCT(xen_domctl_tsc_info)
+ #undef STRUCT
+ 
++#else
++
++#define STRUCT struct xen_domctl_tsc_info
++START_STRUCT(xen_domctl_tsc_info)
++	BASE_ITEM(u32, tsc_mode)
++	BASE_ITEM(u32, gtsc_khz)
++	BASE_ITEM(u32, incarnation)
++	BASE_ITEM(u32, pad)
++	BASE_ITEM(u64, elapsed_nsec)
++END_STRUCT(xen_domctl_tsc_info)
++#undef STRUCT
++#endif
++
+ #define STRUCT struct xen_domctl_vcpuextstate
+ START_STRUCT(xen_domctl_vcpuextstate)
+ 	BASE_ITEM(u32, vcpu)
+@@ -575,19 +608,23 @@ START_STRUCT(xen_domctl_getmemlist)
+ END_STRUCT(xen_domctl_getmemlist)
+ #undef STRUCT
+ 
++#ifdef XEN_DOMCTL_getpageframeinfo
+ #define STRUCT struct xen_domctl_getpageframeinfo
+ START_STRUCT(xen_domctl_getpageframeinfo)
+ 	BASE_ITEM(u64, gmfn)
+ 	BASE_ITEM(u32, type)
+ END_STRUCT(xen_domctl_getpageframeinfo)
+ #undef STRUCT
++#endif
+ 
++#ifdef XEN_DOMCTL_getpageframeinfo2
+ #define STRUCT struct xen_domctl_getpageframeinfo2
+ START_STRUCT(xen_domctl_getpageframeinfo2)
+ 	BASE_ITEM(u64, num)
+ 	BASE_ITEM(p64, array)
+ END_STRUCT(xen_domctl_getpageframeinfo2)
+ #undef STRUCT
++#endif
+ 
+ #define STRUCT struct xen_domctl_getvcpuinfo
+ START_STRUCT(xen_domctl_getvcpuinfo)
