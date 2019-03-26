@@ -1,7 +1,7 @@
 Summary: Tracks and displays system calls associated with a running process
 Name: strace
 Version: 4.9
-Release: 1.1.5
+Release: 1.1.5%{dist}
 License: BSD
 Source0: https://code.citrite.net/rest/archive/latest/projects/XSU/repos/%{name}/archive?at=e4db4c4bddd&format=tar.gz&prefix=%{name}-%{version}#/%{name}-%{version}.tar.gz
 Patch0: build-integration.patch
