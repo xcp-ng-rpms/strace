@@ -17,6 +17,7 @@ Patch9: xen-4.9-compat.patch
 Patch10: xen-4.10-compat.patch
 Patch11: xen-4.11-compat.patch
 
+BuildRequires: gcc
 BuildRequires: libacl-devel, libaio-devel, time
 BuildRequires: xen-devel, xen-dom0-libs-devel
 BuildRequires: autoconf, automake
