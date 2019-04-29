@@ -1,8 +1,28 @@
 diff --git a/ioctlexact.c b/ioctlexact.c
-index a446d3b..4f9d682 100644
+index a446d3b8..52aa8811 100644
 --- a/ioctlexact.c
 +++ b/ioctlexact.c
-@@ -172,7 +172,6 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+@@ -61,7 +61,9 @@ static const switch_item privcmd_hvmop_cmd_items[] = {
+ // HVMOP_track_dirty_vram
+ 	/* HVMOP(modified_memory, xen_hvm_modified_memory, 0) */
+ 	/* HVMOP(set_mem_type, xen_hvm_set_mem_type, 0) */
++#ifdef HVMOP_process_dying
+ 	HVMOP(process_dying, void, 0)
++#endif
+ 	HVMOP(pagetable_dying, xen_hvm_pagetable_dying, 0)
+ // TODO output !!!
+ 	HVMOP(get_time, xen_hvm_get_time, 1)
+@@ -72,7 +74,9 @@ static const switch_item privcmd_hvmop_cmd_items[] = {
+ 	/* HVMOP(inject_trap, xen_hvm_inject_trap, 0) */
+ // TODO output !!!
+ 	HVMOP(get_mem_type, xen_hvm_get_mem_type, 1)
++#ifdef HVMOP_set_driver_version
+ 	HVMOP(set_driver_version, xen_hvm_set_driver_version, 0)
++#endif
+ 	{ 0, NULL, }
+ };
+ 
+@@ -172,7 +176,6 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
  	XEN_DOMCTL_NOARG(pausedomain)
  	XEN_DOMCTL_NOARG(unpausedomain)
  	XEN_DOMCTL_OUT(getdomaininfo, xen_domctl_getdomaininfo, getdomaininfo)	// output
@@ -10,7 +30,7 @@ index a446d3b..4f9d682 100644
  #ifdef XEN_DOMCTL_getpageframeinfo
  	XEN_DOMCTL_OUT(getpageframeinfo, xen_domctl_getpageframeinfo, getpageframeinfo)	// output, gmfn in
  #endif
-@@ -185,7 +184,9 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+@@ -185,7 +188,9 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
  	XEN_DOMCTL(setvcpucontext, xen_domctl_vcpucontext, vcpucontext)	// input
  	XEN_DOMCTL_OUT(getvcpucontext, xen_domctl_vcpucontext, vcpucontext)	// vcpu in output
  	XEN_DOMCTL_OUT(getvcpuinfo, xen_domctl_getvcpuinfo, getvcpuinfo)	// vcpu in, output
@@ -20,7 +40,7 @@ index a446d3b..4f9d682 100644
  //	XEN_DOMCTL(scheduler_op, xen_domctl_scheduler_op, scheduler_op)	// depends ??
  	XEN_DOMCTL(setdomainhandle, xen_domctl_setdomainhandle, setdomainhandle)	// input
  	XEN_DOMCTL(setdebugging, xen_domctl_setdebugging, setdebugging)	// input
-@@ -208,7 +209,9 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+@@ -208,7 +213,9 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
  	XEN_DOMCTL(bind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input ??
  	XEN_DOMCTL(memory_mapping, xen_domctl_memory_mapping, memory_mapping)	// input
  	XEN_DOMCTL(ioport_mapping, xen_domctl_ioport_mapping, ioport_mapping)	// input
@@ -30,7 +50,7 @@ index a446d3b..4f9d682 100644
  	XEN_DOMCTL(set_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// input
  	XEN_DOMCTL_OUT(get_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// output, vcpu input
  //	XEN_DOMCTL(set_opt_feature, xen_domctl_set_opt_feature, set_opt_feature)	// only ia64
-@@ -289,7 +292,6 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
+@@ -289,7 +296,6 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
  	XEN_DOMCTL_NOARG(pausedomain)
  	XEN_DOMCTL_NOARG(unpausedomain)
  	XEN_DOMCTL_OUT(getdomaininfo, xen_domctl_getdomaininfo, getdomaininfo)	// output
@@ -38,7 +58,7 @@ index a446d3b..4f9d682 100644
  #ifdef XEN_DOMCTL_getpageframeinfo
  	XEN_DOMCTL_OUT(getpageframeinfo, xen_domctl_getpageframeinfo, getpageframeinfo)	// output, gmfn in
  #endif
-@@ -325,7 +327,9 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
+@@ -325,7 +331,9 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
  	XEN_DOMCTL(bind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input ??
  	XEN_DOMCTL(memory_mapping, xen_domctl_memory_mapping, memory_mapping)	// input
  	XEN_DOMCTL(ioport_mapping, xen_domctl_ioport_mapping, ioport_mapping)	// input
@@ -49,10 +69,24 @@ index a446d3b..4f9d682 100644
  	XEN_DOMCTL_OUT(get_ext_vcpucontext, xen_domctl_ext_vcpucontext, ext_vcpucontext)	// output, vcpu input
  //	XEN_DOMCTL(set_opt_feature, xen_domctl_set_opt_feature, set_opt_feature)	// only ia64
 diff --git a/structures.h b/structures.h
-index 13994c6..10b2b33 100644
+index 13994c67..2f31717c 100644
 --- a/structures.h
 +++ b/structures.h
-@@ -334,11 +334,13 @@ START_STRUCT(xen_domctl_vcpucontext)
+@@ -190,11 +190,13 @@ START_STRUCT(xen_hvm_get_mem_type)
+ END_STRUCT(xen_hvm_get_mem_type)
+ #undef STRUCT
+ 
++#ifdef HVMOP_set_driver_version
+ #define STRUCT struct xen_hvm_set_driver_version
+ START_STRUCT(xen_hvm_set_driver_version)
+ 	BASE_ITEM(u32, build)
+ END_STRUCT(xen_hvm_set_driver_version)
+ #undef STRUCT
++#endif /* HVMOP_set_driver_version */
+ 
+ #define STRUCT struct xen_hvm_xentrace
+ FIXED_ARRAY(xen_hvm_xentrace_extras, extra, u8)
+@@ -334,11 +336,13 @@ START_STRUCT(xen_domctl_vcpucontext)
  END_STRUCT(xen_domctl_vcpucontext)
  #undef STRUCT
  
@@ -66,7 +100,7 @@ index 13994c6..10b2b33 100644
  
  #define STRUCT struct xen_domctl_setdomainhandle
  START_STRUCT(xen_domctl_setdomainhandle)
-@@ -445,6 +447,7 @@ START_STRUCT(xen_domctl_ioport_mapping)
+@@ -445,6 +449,7 @@ START_STRUCT(xen_domctl_ioport_mapping)
  END_STRUCT(xen_domctl_ioport_mapping)
  #undef STRUCT
  
@@ -74,7 +108,7 @@ index 13994c6..10b2b33 100644
  #define STRUCT struct xen_domctl_pin_mem_cacheattr
  START_STRUCT(xen_domctl_pin_mem_cacheattr)
  	BASE_ITEM(u64, start)
-@@ -452,6 +455,7 @@ START_STRUCT(xen_domctl_pin_mem_cacheattr)
+@@ -452,6 +457,7 @@ START_STRUCT(xen_domctl_pin_mem_cacheattr)
  	BASE_ITEM(u32, type)
  END_STRUCT(xen_domctl_pin_mem_cacheattr)
  #undef STRUCT
@@ -82,7 +116,7 @@ index 13994c6..10b2b33 100644
  
  #define STRUCT struct xen_domctl_ext_vcpucontext
  START_STRUCT(xen_domctl_ext_vcpucontext)
-@@ -605,15 +609,6 @@ START_STRUCT(xen_domctl_gdbsx_memio)
+@@ -605,15 +611,6 @@ START_STRUCT(xen_domctl_gdbsx_memio)
  END_STRUCT(xen_domctl_gdbsx_memio)
  #undef STRUCT
  
