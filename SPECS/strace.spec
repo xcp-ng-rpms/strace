@@ -1,7 +1,7 @@
 Summary: Tracks and displays system calls associated with a running process
 Name: strace
 Version: 4.9
-Release: 1.1.6
+Release: 1.1.8
 License: BSD
 
 Source0: https://code.citrite.net/rest/archive/latest/projects/XSU/repos/strace/archive?at=e4db4c4bddd&format=tar.gz&prefix=strace-4.9#/strace-4.9.tar.gz
@@ -18,9 +18,10 @@ Patch8: xen-4.8-compat.patch
 Patch9: xen-4.9-compat.patch
 Patch10: xen-4.10-compat.patch
 Patch11: xen-4.11-compat.patch
+Patch12: xen-4.13-compat.patch
 
+Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XS/repos/strace.pg/archive?format=tar&at=1.1.8#/strace.patches.tar) = 69df332db089bfa139bfb0a051e3adae43c08acf
 Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XSU/repos/strace/archive?at=e4db4c4bddd&format=tar.gz&prefix=strace-4.9#/strace-4.9.tar.gz) = e4db4c4bdddf1c37374fe1449a0c669b7f105d7e
-Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XS/repos/strace.pg/archive?format=tar&at=1.1.6#/strace.patches.tar) = c16dd6c19ca9f55cd4a538eeb78eb54e56865d9c
 
 
 BuildRequires: libacl-devel, libaio-devel, time
@@ -41,8 +42,8 @@ received by a process.
 
 %ifarch %{strace64_arches}
 %package -n %{name}64
+Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XS/repos/strace.pg/archive?format=tar&at=1.1.8#/strace.patches.tar) = 69df332db089bfa139bfb0a051e3adae43c08acf
 Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XSU/repos/strace/archive?at=e4db4c4bddd&format=tar.gz&prefix=strace-4.9#/strace-4.9.tar.gz) = e4db4c4bdddf1c37374fe1449a0c669b7f105d7e
-Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XS/repos/strace.pg/archive?format=tar&at=1.1.6#/strace.patches.tar) = c16dd6c19ca9f55cd4a538eeb78eb54e56865d9c
 Summary: Tracks and displays system calls associated with a running process.
 
 %description -n %{name}64
@@ -100,6 +101,9 @@ make -k check VERBOSE=1
 %endif
 
 %changelog
+* Thu Sep 26 2019 Igor Druzhinin <igor.druzhinin@citrix.com> - 4.9-1.1.7
+- Compat for Xen 4.13
+
 * Fri Oct 12 2018 Simon Rowe <simon.rowe@citrix.com> - 4.9-1.1.6
 - Fix compilation with Xen 4.11 after legacy patches were dropped
 
