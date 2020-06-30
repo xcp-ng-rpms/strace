@@ -1,7 +1,7 @@
 Summary: Tracks and displays system calls associated with a running process
 Name: strace
 Version: 4.9
-Release: 1.1.8%{?dist}
+Release: 1.1.9%{?dist}
 License: BSD
 
 Source0: https://code.citrite.net/rest/archive/latest/projects/XSU/repos/strace/archive?at=e4db4c4bddd&format=tar.gz&prefix=strace-4.9#/strace-4.9.tar.gz
@@ -20,8 +20,8 @@ Patch10: xen-4.10-compat.patch
 Patch11: xen-4.11-compat.patch
 Patch12: xen-4.13-compat.patch
 
-Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XS/repos/strace.pg/archive?format=tar&at=1.1.8#/strace.patches.tar) = 69df332db089bfa139bfb0a051e3adae43c08acf
 Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XSU/repos/strace/archive?at=e4db4c4bddd&format=tar.gz&prefix=strace-4.9#/strace-4.9.tar.gz) = e4db4c4bdddf1c37374fe1449a0c669b7f105d7e
+Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XS/repos/strace.pg/archive?format=tar&at=1.1.9#/strace.patches.tar) = 6887c13323acc2a30b487420a1348cb093714374
 
 
 BuildRequires: gcc
@@ -43,8 +43,8 @@ received by a process.
 
 %ifarch %{strace64_arches}
 %package -n %{name}64
-Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XS/repos/strace.pg/archive?format=tar&at=1.1.8#/strace.patches.tar) = 69df332db089bfa139bfb0a051e3adae43c08acf
 Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XSU/repos/strace/archive?at=e4db4c4bddd&format=tar.gz&prefix=strace-4.9#/strace-4.9.tar.gz) = e4db4c4bdddf1c37374fe1449a0c669b7f105d7e
+Provides: gitsha(https://code.citrite.net/rest/archive/latest/projects/XS/repos/strace.pg/archive?format=tar&at=1.1.9#/strace.patches.tar) = 6887c13323acc2a30b487420a1348cb093714374
 Summary: Tracks and displays system calls associated with a running process.
 
 %description -n %{name}64
