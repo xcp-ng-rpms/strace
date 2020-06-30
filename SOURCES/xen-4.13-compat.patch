@@ -1,5 +1,5 @@
 diff --git a/ioctlexact.c b/ioctlexact.c
-index 52aa8811..c576da63 100644
+index 52aa8811..f10717c1 100644
 --- a/ioctlexact.c
 +++ b/ioctlexact.c
 @@ -224,12 +224,20 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
@@ -23,7 +23,17 @@ index 52aa8811..c576da63 100644
  	XEN_DOMCTL(debug_op, xen_domctl_debug_op, debug_op)	// input
  	XEN_DOMCTL_OUT(gethvmcontext_partial, xen_domctl_hvmcontext_partial, hvmcontext_partial)	// output, type, instance input
  #ifdef XEN_DOMCTL_MEM_EVENT_OP_SHARING
-@@ -342,12 +350,20 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
+@@ -255,7 +263,9 @@ print_xen_domctl_enter(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL_OUT(getvcpuextstate, xen_domctl_vcpuextstate, vcpuextstate)	// output, vcpu, size, xfeature_mask input
+ 	XEN_DOMCTL(set_access_required, xen_domctl_set_access_required, access_required)	// input
+ 	XEN_DOMCTL_OUT(get_runstate_info, xen_domctl_runstate_info, domain_runstate)	// output
++#ifdef XEN_DOMCTL_setcorespersocket
+ 	XEN_DOMCTL(setcorespersocket, xen_domctl_corespersocket, corespersocket)	// input
++#endif
+ 	XEN_DOMCTL_OUT(gdbsx_guestmemio, xen_domctl_gdbsx_memio, gdbsx_guest_memio)	// see structure, mostly input
+ 	XEN_DOMCTL(gdbsx_pausevcpu, xen_domctl_gdbsx_pauseunp_vcpu, gdbsx_pauseunp_vcpu)	// input
+ 	XEN_DOMCTL(gdbsx_unpausevcpu, xen_domctl_gdbsx_pauseunp_vcpu, gdbsx_pauseunp_vcpu)	// input
+@@ -342,12 +352,20 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
  	XEN_DOMCTL(deassign_device, xen_domctl_assign_device, assign_device)	// input
  	XEN_DOMCTL(unbind_pt_irq, xen_domctl_bind_pt_irq, bind_pt_irq)	// input
  #if defined(__i386__) || defined(__x86_64__)
@@ -44,8 +54,18 @@ index 52aa8811..c576da63 100644
  	XEN_DOMCTL(debug_op, xen_domctl_debug_op, debug_op)	// input
  	XEN_DOMCTL_OUT(gethvmcontext_partial, xen_domctl_hvmcontext_partial, hvmcontext_partial)	// output, type, instance input
  #ifdef XEN_DOMCTL_MEM_EVENT_OP_SHARING
+@@ -374,7 +392,9 @@ print_xen_domctl_exit(print_status *status, const struct xen_domctl *data)
+ 	XEN_DOMCTL_OUT(getvcpuextstate, xen_domctl_vcpuextstate, vcpuextstate)	// output, vcpu, size, xfeature_mask input
+ 	XEN_DOMCTL(set_access_required, xen_domctl_set_access_required, access_required)	// input
+ 	XEN_DOMCTL_OUT(get_runstate_info, xen_domctl_runstate_info, domain_runstate)	// output
++#ifdef XEN_DOMCTL_setcorespersocket
+ 	XEN_DOMCTL(setcorespersocket, xen_domctl_corespersocket, corespersocket)	// input
++#endif
+ 	XEN_DOMCTL_OUT(gdbsx_guestmemio, xen_domctl_gdbsx_memio, gdbsx_guest_memio)	// see structure, mostly input
+ 	XEN_DOMCTL(gdbsx_pausevcpu, xen_domctl_gdbsx_pauseunp_vcpu, gdbsx_pauseunp_vcpu)	// input
+ 	XEN_DOMCTL(gdbsx_unpausevcpu, xen_domctl_gdbsx_pauseunp_vcpu, gdbsx_pauseunp_vcpu)	// input
 diff --git a/structures.h b/structures.h
-index 2f31717c..c24d5385 100644
+index 2f31717c..8a18d747 100644
 --- a/structures.h
 +++ b/structures.h
 @@ -478,6 +478,7 @@ START_STRUCT(xen_domctl_set_target)
@@ -76,3 +96,17 @@ index 2f31717c..c24d5385 100644
  END_STRUCT(xen_domctl_vm_event_op)
  #undef STRUCT
  #endif
+@@ -569,11 +575,13 @@ START_STRUCT(xen_domctl_set_access_required)
+ END_STRUCT(xen_domctl_set_access_required)
+ #undef STRUCT
+ 
++#ifdef XEN_DOMCTL_setcorespersocket
+ #define STRUCT struct xen_domctl_corespersocket
+ START_STRUCT(xen_domctl_corespersocket)
+ 	BASE_ITEM(u32, cores_per_socket)
+ END_STRUCT(xen_domctl_corespersocket)
+ #undef STRUCT
++#endif
+ 
+ #define STRUCT struct xen_domctl_gdbsx_pauseunp_vcpu
+ START_STRUCT(xen_domctl_gdbsx_pauseunp_vcpu)
